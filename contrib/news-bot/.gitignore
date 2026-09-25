@@ -1,0 +1,2 @@
+# Runtime state (which stories were already posted). Never commit it.
+.state/
