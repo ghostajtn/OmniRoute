@@ -1,0 +1,17 @@
+{
+  "name": "news-radar-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Discord news bot: breaking news, what market-moving people say, and what could happen next.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node newsBot.mjs",
+    "once": "node newsBot.mjs --once",
+    "dry-run": "node newsBot.mjs --once --dry-run",
+    "test-webhook": "node newsBot.mjs --test",
+    "test": "node --test test/*.test.mjs"
+  }
+}

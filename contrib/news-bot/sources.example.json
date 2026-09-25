@@ -1,0 +1,15 @@
+{
+  "replaceDefaults": false,
+  "feeds": [
+    {
+      "id": "coindesk",
+      "category": "markets",
+      "name": "CoinDesk",
+      "url": "https://www.coindesk.com/arc/outboundfeeds/rss/"
+    }
+  ],
+  "people": [
+    { "name": "Nancy Pelosi", "query": "\"Nancy Pelosi\" (stock OR trade OR shares)" },
+    { "name": "Mark Zuckerberg" }
+  ]
+}

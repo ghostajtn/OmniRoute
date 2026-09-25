@@ -73,7 +73,11 @@ jobs:
         env:
           OMNIROUTE_URL: http://localhost:20128
           OMNIROUTE_API_KEY: not-needed-blocked-before-upstream
-        run: npx --yes promptfoo@latest eval -c promptfooconfig.yaml --no-cache
+        # Use the promptfoo pinned in package-lock.json (installed by `npm ci` above).
+        # `promptfoo@latest` floated to 0.123.1, which crashes with
+        # "result?.error?.includes is not a function" on the guard's object-shaped
+        # `error` body, failing this blocking check on every PR.
+        run: npx --no-install promptfoo eval -c promptfooconfig.yaml --no-cache
       - name: Stop server
         if: always()
         run: kill "$(cat server.pid)" || true
