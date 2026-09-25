@@ -1,9 +1,11 @@
 name: News Bot
 
-# Runs contrib/news-bot every 15 minutes and posts to Discord.
+# Runs contrib/news-bot every 15 minutes: posts to Discord and publishes the
+# News Radar web app (contrib/news-bot/app) with a fresh feed.json to GitHub Pages.
 # Setup: add the repository secret DISCORD_WEBHOOK_URL (Settings → Secrets and
-# variables → Actions). Without it every run is a no-op. See contrib/news-bot/README.md.
-# Scheduled runs only fire from the repository's default branch.
+# variables → Actions), and set Settings → Pages → Source to "GitHub Actions".
+# Without the secret every run is a no-op. Scheduled runs only fire from the
+# repository's default branch. See contrib/news-bot/README.md.
 
 on:
   schedule:
@@ -53,6 +55,7 @@ jobs:
           NEWS_BOT_EXTRA_PEOPLE: ${{ vars.NEWS_BOT_EXTRA_PEOPLE }}
           NEWS_BOT_DISABLE: ${{ vars.NEWS_BOT_DISABLE }}
           NEWS_BOT_STATE_FILE: .news-bot-state/state.json
+          NEWS_BOT_FEED_FILE: .news-bot-state/feed.json
           SEND_TEST: ${{ inputs.send_test_message }}
         run: |
           if [ "$SEND_TEST" = "true" ]; then
@@ -67,3 +70,35 @@ jobs:
         with:
           path: .news-bot-state
           key: news-bot-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Build the web app
+        if: hashFiles('.news-bot-state/feed.json') != ''
+        run: |
+          mkdir -p _site
+          cp -R contrib/news-bot/app/. _site/
+          mv _site/sw.mjs _site/sw.js
+          cp .news-bot-state/feed.json _site/feed.json
+
+      - name: Upload the web app
+        if: hashFiles('_site/feed.json') != ''
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  publish-app:
+    needs: post-news
+    if: ${{ !inputs.send_test_message }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Posting news must not go red just because GitHub Pages is not switched on yet.
+    continue-on-error: true
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Publish to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

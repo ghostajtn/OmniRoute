@@ -42,6 +42,22 @@ The workflow `.github/workflows/news-bot.yml` runs the bot every 15 minutes.
 
 The bot's memory of which stories it already posted is kept between runs in the Actions cache.
 
+### The News Radar app
+
+Each run also publishes the News Radar web app (`contrib/news-bot/app/`) to GitHub Pages, together with a
+fresh `feed.json`. The app shows the latest headlines by section, Trump's posts, what the watchlist is saying,
+live odds on what could happen, and the week's market-moving events.
+
+1. Open **Settings → Pages** and, under **Build and deployment**, set **Source** to **GitHub Actions**.
+2. After the next run, open `https://<your-user>.github.io/<repo>/`. For this fork, that's
+   https://ghostajtn.github.io/OmniRoute/.
+3. To install it like an app:
+   - iPhone (Safari): tap **Share → Add to Home Screen**.
+   - Android (Chrome): tap **Install app** in the page, or **⋮ → Install app**.
+
+The app refreshes itself every 5 minutes while it's open. It also works offline with the last news it loaded.
+If Pages is off, the bot still posts to Discord; only the app step fails.
+
 Notes:
 
 - Public repos get Actions minutes for free. A private repo uses about 2,900 minutes a month at the
@@ -85,6 +101,7 @@ a day of backlog. After that, it posts every new story.
 | `NEWS_BOT_TIMEZONE`                        | `America/New_York`                     | Time zone for the calendar                                                               |
 | `NEWS_BOT_NAME`                            | `News Radar`                           | Name the bot posts under                                                                 |
 | `NEWS_BOT_STATE_FILE`                      | `contrib/news-bot/.state/state.json`   | Where the bot remembers what it already posted                                           |
+| `NEWS_BOT_FEED_FILE`                       | —                                      | Where to write `feed.json` for the web app after each cycle                              |
 | `NEWS_BOT_CONFIG`                          | —                                      | Path to a JSON file with extra feeds and people (see below)                              |
 | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | —                                      | Turn on the 🧠 AI outlook (see below)                                                    |
 | `NEWS_BOT_OUTLOOK_EVERY_HOURS`             | `6`                                    | How often to post the AI outlook                                                         |

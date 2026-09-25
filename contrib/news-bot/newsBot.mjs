@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { DiscordWebhook, isValidWebhookUrl, redactWebhook, truncate } from "./lib/discord.mjs";
+import { buildFeed, compactEvent, compactScenario, writeFeed } from "./lib/feed.mjs";
 import {
   DEFAULT_MARKET_TAGS,
   detectOddsMoves,
@@ -76,6 +77,7 @@ export function loadConfig(env = process.env, argv = process.argv.slice(2)) {
     dryRun: flags.has("--dry-run"),
     test: flags.has("--test"),
     stateFile: env.NEWS_BOT_STATE_FILE || join(HERE, ".state", "state.json"),
+    feedFile: env.NEWS_BOT_FEED_FILE || "",
     configFile: env.NEWS_BOT_CONFIG || "",
     username: env.NEWS_BOT_NAME || "News Radar",
     intervalMinutes: num(env.NEWS_BOT_INTERVAL_MINUTES, 10),
@@ -194,10 +196,15 @@ export function selectNewItems(items, state, config, now = Date.now()) {
   return selected;
 }
 
+/** Headlines that could move prices get a ⚡ (Truth Social posts are judged on their text). */
+export function isHot(item) {
+  return isMarketMoving(item.category === "trump" ? `${item.title} ${item.summary}` : item.title);
+}
+
 export function newsEmbed(item) {
   const category = CATEGORIES[item.category] || CATEGORIES.breaking;
   const isTruth = item.category === "trump";
-  const hot = isMarketMoving(isTruth ? `${item.title} ${item.summary}` : item.title);
+  const hot = isHot(item);
   const isGoogle = /news\.google\.com/.test(item.link);
   const embed = {
     color: category.color,
@@ -274,7 +281,7 @@ async function postNews(selected, config, state, discord, now) {
       onSent: (count) => {
         for (const item of items.slice(done, done + count)) {
           markSeen(state, item, now);
-          rememberHeadline(state, item, now);
+          rememberHeadline(state, { ...item, hot: isHot(item) }, now);
         }
         done += count;
         posted += count;
@@ -293,6 +300,18 @@ async function postPredictions(config, state, deps, now) {
     thresholdPts: config.oddsAlertPoints,
   });
   state.oddsBaseline = baseline;
+  state.latestScenarios = tracked.slice(0, 12).map(compactScenario);
+  for (const move of moves) {
+    state.recentOddsMoves.push({
+      title: move.scenario.title,
+      url: move.scenario.url,
+      question: move.market.question,
+      from: move.from,
+      to: move.to,
+      deltaPts: Math.round(move.deltaPts * 10) / 10,
+      at: now,
+    });
+  }
   if (moves.length) {
     await discord.sendEmbeds(moves.slice(0, 10).map(oddsMoveEmbed), {
       username: `${config.username} • ${CATEGORIES.predictions.label}`,
@@ -315,7 +334,14 @@ async function postPredictions(config, state, deps, now) {
 async function postCalendar(config, state, deps, now) {
   const { day, hour } = localDayAndHour(now, config.timeZone);
   if (state.lastCalendarDay === day || hour < 6) return 0;
-  const events = upcomingHighImpact(await fetchCalendar(deps.httpGet), { now, hours: 36 });
+  const week = await fetchCalendar(deps.httpGet);
+  // The whole week (from yesterday on) goes to the web app; Discord gets the next 36 hours.
+  state.calendarEvents = upcomingHighImpact(week, {
+    now: now - 24 * HOUR_MS,
+    hours: 8 * 24,
+    impacts: ["High", "Medium"],
+  }).map(compactEvent);
+  const events = upcomingHighImpact(week, { now, hours: 36 });
   state.lastCalendarDay = day;
   if (!events.length) return 0;
   await deps.discord.sendEmbeds(
@@ -356,6 +382,7 @@ async function postOutlook(config, state, deps, scenarios, now) {
     { username: `${config.username} • ${CATEGORIES.outlook.label}` }
   );
   state.lastOutlookAt = now;
+  state.lastOutlook = { text, at: now };
   return true;
 }
 
@@ -472,6 +499,7 @@ async function main() {
       if (config.once) process.exitCode = 1;
     } finally {
       if (!config.dryRun) await saveState(config.stateFile, state);
+      if (config.feedFile) await writeFeed(config.feedFile, buildFeed(state));
     }
     if (config.once || stopping) break;
     await new Promise((resolve) => {

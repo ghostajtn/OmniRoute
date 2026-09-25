@@ -6,7 +6,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 const SEEN_TTL_MS = 4 * 24 * 60 * 60 * 1000;
-const MAX_RECENT_HEADLINES = 80;
+const MAX_RECENT_HEADLINES = 200;
+const MAX_RECENT_ODDS_MOVES = 30;
 
 export function emptyState() {
   return {
@@ -18,6 +19,11 @@ export function emptyState() {
     lastOutlookAt: 0,
     lastCalendarDay: "",
     recentHeadlines: [],
+    // Kept for the web app's feed.json (see lib/feed.mjs).
+    latestScenarios: [],
+    recentOddsMoves: [],
+    calendarEvents: [],
+    lastOutlook: null,
   };
 }
 
@@ -77,13 +83,22 @@ export function pruneState(state, now = Date.now()) {
   if (state.recentHeadlines.length > MAX_RECENT_HEADLINES) {
     state.recentHeadlines = state.recentHeadlines.slice(-MAX_RECENT_HEADLINES);
   }
+  if (state.recentOddsMoves.length > MAX_RECENT_ODDS_MOVES) {
+    state.recentOddsMoves = state.recentOddsMoves.slice(-MAX_RECENT_ODDS_MOVES);
+  }
 }
 
 export function rememberHeadline(state, item, now = Date.now()) {
   state.recentHeadlines.push({
     title: item.title,
+    link: item.link,
+    source: item.source || item.feedName,
     who: item.person || item.feedName,
     category: item.category,
+    published: item.published || null,
+    hot: Boolean(item.hot),
+    // Truth Social posts carry their text in the summary; other feeds only need the title.
+    text: item.category === "trump" ? String(item.summary || "").slice(0, 600) : "",
     at: now,
   });
 }

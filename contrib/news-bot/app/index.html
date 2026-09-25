@@ -1,0 +1,1034 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>News Radar</title>
+    <meta
+      name="description"
+      content="Breaking news, what Trump and big investors are saying, and live odds on what could happen next."
+    />
+    <meta name="theme-color" content="#0d7566" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b1411" media="(prefers-color-scheme: dark)" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="News Radar" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Public+Sans:wght@400;500;600;700&display=swap"
+    />
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #eef2f0;
+        --surface: #ffffff;
+        --ink: #13201b;
+        --muted: #5a6a64;
+        --rule: #d7dfdb;
+        --accent: #0d7566;
+        --accent-ink: #ffffff;
+        --accent-soft: #d6ece7;
+        --hot: #9a5e0b;
+        --hot-soft: #f7ead3;
+        --up: #1d7f49;
+        --down: #b93a2e;
+        --c-breaking: #c2413a;
+        --c-world: #2f6fc0;
+        --c-markets: #1d7f49;
+        --c-people: #7b4fc4;
+        --c-trump: #c76a17;
+        --bar: #cfe3dd;
+        --shadow: 0 1px 2px rgb(19 32 27 / 0.06), 0 4px 16px rgb(19 32 27 / 0.05);
+        --serif: "Newsreader", "Iowan Old Style", Georgia, "Times New Roman", serif;
+        --sans: "Public Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --bg: #0b1411;
+          --surface: #111d19;
+          --ink: #e2ebe7;
+          --muted: #8ea49b;
+          --rule: #22342d;
+          --accent: #43c3ae;
+          --accent-ink: #06201b;
+          --accent-soft: #15362f;
+          --hot: #e8ab47;
+          --hot-soft: #3a2a10;
+          --up: #4fc48b;
+          --down: #f07166;
+          --c-breaking: #f07166;
+          --c-world: #6aa3ef;
+          --c-markets: #4fc48b;
+          --c-people: #b38cf0;
+          --c-trump: #f0a04b;
+          --bar: #1d3a33;
+          --shadow: none;
+        }
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.5 var(--sans);
+        -webkit-text-size-adjust: 100%;
+      }
+      a {
+        color: inherit;
+      }
+      button {
+        font: inherit;
+        color: inherit;
+      }
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .wrap {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding-inline: max(16px, env(safe-area-inset-left, 0px));
+      }
+
+      /* Header */
+      .top {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        background: color-mix(in srgb, var(--bg) 88%, transparent);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-bottom: 1px solid var(--rule);
+        padding-top: env(safe-area-inset-top, 0px);
+      }
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding-block: 12px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-right: auto;
+        min-width: 0;
+      }
+      .brand svg {
+        flex: none;
+      }
+      .brand h1 {
+        margin: 0;
+        font: 600 21px/1 var(--serif);
+        letter-spacing: -0.01em;
+        white-space: nowrap;
+      }
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font: 500 12px/1.2 var(--mono);
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .pulse {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 0 var(--accent);
+        animation: ping 2.4s ease-out infinite;
+      }
+      .status.stale .pulse {
+        background: var(--hot);
+        animation: none;
+      }
+      @keyframes ping {
+        0% {
+          box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+        }
+        80%,
+        100% {
+          box-shadow: 0 0 0 8px transparent;
+        }
+      }
+      .iconbtn {
+        display: inline-grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        border: 1px solid var(--rule);
+        background: var(--surface);
+        cursor: pointer;
+      }
+      .iconbtn.spin svg {
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .install {
+        border: 0;
+        border-radius: 999px;
+        padding: 8px 14px;
+        background: var(--accent);
+        color: var(--accent-ink);
+        font-weight: 600;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        padding-bottom: 12px;
+        scrollbar-width: none;
+      }
+      .tabs::-webkit-scrollbar {
+        display: none;
+      }
+      .tab {
+        flex: none;
+        border: 1px solid var(--rule);
+        background: var(--surface);
+        border-radius: 999px;
+        padding: 6px 13px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .tab[aria-selected="true"] {
+        background: var(--ink);
+        border-color: var(--ink);
+        color: var(--bg);
+      }
+      .tab .count {
+        font: 500 11px/1 var(--mono);
+        opacity: 0.7;
+      }
+
+      /* Layout */
+      main {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 28px;
+        padding-block: 20px 48px;
+      }
+      @media (min-width: 960px) {
+        main.split {
+          grid-template-columns: minmax(0, 1fr) 340px;
+          align-items: start;
+        }
+        .rail {
+          position: sticky;
+          top: 128px;
+        }
+      }
+      .rail {
+        display: grid;
+        gap: 20px;
+      }
+      .section-title {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 0 0 10px;
+        font: 600 12px/1.2 var(--sans);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      .section-title a {
+        text-transform: none;
+        letter-spacing: 0;
+        font-weight: 500;
+        color: var(--accent);
+        text-decoration: none;
+      }
+
+      .search {
+        width: 100%;
+        border: 1px solid var(--rule);
+        background: var(--surface);
+        border-radius: 12px;
+        padding: 10px 14px;
+        font: inherit;
+        color: var(--ink);
+        margin-bottom: 18px;
+      }
+      .search::placeholder {
+        color: var(--muted);
+      }
+
+      /* Headlines */
+      .group + .group {
+        margin-top: 22px;
+      }
+      .group h2 {
+        margin: 0 0 4px;
+        font: 600 12px/1.2 var(--sans);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      .story {
+        display: grid;
+        grid-template-columns: 52px minmax(0, 1fr);
+        gap: 12px;
+        padding: 13px 0;
+        border-bottom: 1px solid var(--rule);
+        text-decoration: none;
+      }
+      .story:last-child {
+        border-bottom: 0;
+      }
+      .story time {
+        font: 500 12px/1.9 var(--mono);
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px 8px;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 3px;
+      }
+      .cat {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-size: 11px;
+        color: var(--ink);
+      }
+      .cat::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-radius: 2px;
+        background: var(--dot, var(--muted));
+      }
+      .hot {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 1px 7px;
+        border-radius: 999px;
+        background: var(--hot-soft);
+        color: var(--hot);
+        font-weight: 700;
+        font-size: 11px;
+      }
+      .headline {
+        margin: 0;
+        font: 500 18px/1.3 var(--serif);
+        letter-spacing: -0.005em;
+        text-wrap: pretty;
+      }
+      .story:hover .headline {
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 3px;
+      }
+      .post {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 14px;
+        white-space: pre-line;
+        overflow-wrap: anywhere;
+      }
+
+      /* Odds */
+      .odds {
+        background: var(--surface);
+        border: 1px solid var(--rule);
+        border-radius: 14px;
+        padding: 14px 16px;
+        box-shadow: var(--shadow);
+      }
+      .odds + .odds {
+        margin-top: 10px;
+      }
+      .odds h3 {
+        margin: 0 0 10px;
+        font: 600 16px/1.3 var(--serif);
+      }
+      .odds h3 a {
+        text-decoration: none;
+      }
+      .odds h3 a:hover {
+        text-decoration: underline;
+      }
+      .outcome {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 2px 10px;
+        align-items: baseline;
+        margin-top: 8px;
+        font-size: 13px;
+      }
+      .outcome .label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .outcome .pct {
+        font: 500 13px/1 var(--mono);
+        font-variant-numeric: tabular-nums;
+      }
+      .outcome .track {
+        grid-column: 1 / -1;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--bar);
+        overflow: hidden;
+      }
+      .outcome .fill {
+        height: 100%;
+        border-radius: inherit;
+        background: var(--accent);
+      }
+      .chg {
+        font: 500 11px/1 var(--mono);
+        margin-left: 6px;
+      }
+      .chg.up {
+        color: var(--up);
+      }
+      .chg.down {
+        color: var(--down);
+      }
+      .odds .vol {
+        margin-top: 10px;
+        font: 400 11px/1.2 var(--mono);
+        color: var(--muted);
+      }
+      .grid-odds {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      }
+      .grid-odds .odds + .odds {
+        margin-top: 0;
+      }
+      .moves {
+        display: grid;
+        gap: 8px;
+        margin-bottom: 18px;
+      }
+      .move {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: var(--surface);
+        border: 1px solid var(--rule);
+        text-decoration: none;
+        font-size: 13px;
+      }
+      .move b {
+        font: 600 13px/1.2 var(--mono);
+      }
+
+      /* Events */
+      .events {
+        background: var(--surface);
+        border: 1px solid var(--rule);
+        border-radius: 14px;
+        padding: 6px 16px;
+        box-shadow: var(--shadow);
+      }
+      .day {
+        padding: 10px 0 4px;
+        font: 600 12px/1.2 var(--sans);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      .event {
+        display: grid;
+        grid-template-columns: 58px minmax(0, 1fr);
+        gap: 10px;
+        padding: 8px 0;
+        border-top: 1px solid var(--rule);
+        font-size: 13px;
+      }
+      .event time {
+        font: 500 12px/1.6 var(--mono);
+        color: var(--muted);
+      }
+      .event .name {
+        font-weight: 600;
+      }
+      .impact {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 6px;
+        background: var(--hot);
+      }
+      .impact.medium {
+        background: transparent;
+        border: 2px solid var(--hot);
+      }
+      .nums {
+        color: var(--muted);
+        font: 400 12px/1.5 var(--mono);
+      }
+
+      .empty {
+        padding: 22px 16px;
+        border: 1px dashed var(--rule);
+        border-radius: 14px;
+        color: var(--muted);
+        text-align: center;
+        font-size: 14px;
+      }
+      .note {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        padding: 12px 14px;
+        margin-bottom: 18px;
+        border-radius: 12px;
+        background: var(--accent-soft);
+        font-size: 14px;
+      }
+      .note button {
+        margin-left: auto;
+        border: 0;
+        background: none;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 13px;
+      }
+      footer {
+        border-top: 1px solid var(--rule);
+        padding-block: 18px calc(24px + env(safe-area-inset-bottom, 0px));
+        color: var(--muted);
+        font-size: 12px;
+      }
+      @media (max-width: 480px) {
+        .headline {
+          font-size: 17px;
+        }
+        .story {
+          grid-template-columns: 44px minmax(0, 1fr);
+          gap: 10px;
+        }
+        .status .label-long {
+          display: none;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .pulse,
+        .iconbtn.spin svg {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <div class="wrap">
+        <div class="bar">
+          <div class="brand">
+            <svg width="30" height="30" viewBox="0 0 64 64" aria-hidden="true">
+              <circle cx="32" cy="32" r="30" fill="var(--accent)" />
+              <circle cx="32" cy="32" r="21" fill="none" stroke="var(--accent-ink)" stroke-opacity=".45" stroke-width="2.5" />
+              <circle cx="32" cy="32" r="11" fill="none" stroke="var(--accent-ink)" stroke-opacity=".45" stroke-width="2.5" />
+              <path d="M32 32 L32 4 A28 28 0 0 1 56.2 18 Z" fill="var(--accent-ink)" fill-opacity=".35" />
+              <circle cx="44" cy="17" r="4" fill="var(--hot)" />
+              <circle cx="32" cy="32" r="3.5" fill="var(--accent-ink)" />
+            </svg>
+            <h1>News Radar</h1>
+          </div>
+          <div class="status" id="status" role="status" aria-live="polite">
+            <span class="pulse"></span><span id="status-text">Loading…</span>
+          </div>
+          <button class="install" id="install" hidden>Install app</button>
+          <button class="iconbtn" id="refresh" type="button" aria-label="Refresh news">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+              <path d="M21 3v6h-6" />
+            </svg>
+          </button>
+        </div>
+        <nav class="tabs" id="tabs" role="tablist" aria-label="Sections"></nav>
+      </div>
+    </header>
+
+    <div class="wrap">
+      <main id="main" class="split">
+        <section id="feed" aria-label="Headlines"></section>
+        <aside class="rail" id="rail" aria-label="What could happen"></aside>
+      </main>
+      <footer>
+        Headlines from Google News, BBC, NPR, Al Jazeera, CNBC, MarketWatch, Seeking Alpha and the
+        Truth Social archive at trumpstruth.org. Odds from Polymarket; calendar from Forex Factory.
+        Updated every 15 minutes by the News Radar bot. Odds are market prices, not predictions you
+        should trade on, and nothing here is financial advice.
+      </footer>
+    </div>
+
+    <script>
+      (() => {
+        "use strict";
+
+        const CATS = {
+          people: { label: "Watchlist", color: "var(--c-people)" },
+          trump: { label: "Trump", color: "var(--c-trump)" },
+          markets: { label: "Markets", color: "var(--c-markets)" },
+          world: { label: "World", color: "var(--c-world)" },
+          breaking: { label: "Top stories", color: "var(--c-breaking)" },
+        };
+        const TABS = [
+          ["all", "All news"],
+          ["people", "Watchlist"],
+          ["trump", "Trump"],
+          ["markets", "Markets"],
+          ["world", "World"],
+          ["breaking", "Top stories"],
+          ["odds", "What could happen"],
+          ["events", "Calendar"],
+        ];
+        const FLAGS = { USD: "🇺🇸", EUR: "🇪🇺", GBP: "🇬🇧", JPY: "🇯🇵", CNY: "🇨🇳", CAD: "🇨🇦", AUD: "🇦🇺", NZD: "🇳🇿", CHF: "🇨🇭" };
+        const REFRESH_MS = 5 * 60 * 1000;
+        const STALE_MS = 45 * 60 * 1000;
+
+        const view = { feed: null, tab: "all", query: "", error: "" };
+        const $ = (id) => document.getElementById(id);
+
+        const store = {
+          get(key) {
+            try {
+              return localStorage.getItem(key);
+            } catch {
+              return null;
+            }
+          },
+          set(key, value) {
+            try {
+              localStorage.setItem(key, value);
+            } catch {
+              /* storage unavailable: the page works without it */
+            }
+          },
+        };
+        const savedTab = store.get("nr-tab");
+        if (savedTab && TABS.some(([id]) => id === savedTab)) view.tab = savedTab;
+        const hashTab = location.hash.slice(1);
+        if (TABS.some(([id]) => id === hashTab)) view.tab = hashTab;
+
+        function el(tag, attrs = {}, ...children) {
+          const node = document.createElement(tag);
+          for (const [key, value] of Object.entries(attrs)) {
+            if (value === undefined || value === null || value === false) continue;
+            if (key === "class") node.className = value;
+            else if (key === "style") node.setAttribute("style", value);
+            else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+            else node.setAttribute(key, value === true ? "" : value);
+          }
+          for (const child of children.flat()) {
+            if (child === null || child === undefined || child === false) continue;
+            node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+          }
+          return node;
+        }
+
+        function safeUrl(url) {
+          try {
+            const parsed = new URL(url);
+            return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : null;
+          } catch {
+            return null;
+          }
+        }
+
+        function ago(ms) {
+          const minutes = Math.max(0, Math.round((Date.now() - ms) / 60000));
+          if (minutes < 1) return "just now";
+          if (minutes < 60) return `${minutes} min ago`;
+          const hours = Math.round(minutes / 60);
+          if (hours < 24) return `${hours} h ago`;
+          return `${Math.round(hours / 24)} d ago`;
+        }
+
+        const timeFmt = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+        const dayFmt = new Intl.DateTimeFormat(undefined, { weekday: "long", month: "short", day: "numeric" });
+        const shortDay = new Intl.DateTimeFormat(undefined, { weekday: "short" });
+
+        function storyTime(h) {
+          const ms = h.published || h.at;
+          const minutes = (Date.now() - ms) / 60000;
+          if (minutes < 60) return `${Math.max(1, Math.round(minutes))}m`;
+          if (minutes < 24 * 60) return timeFmt.format(ms).replace(/\s?(AM|PM)$/i, (m) => m.trim().toLowerCase()[0]);
+          return shortDay.format(ms);
+        }
+
+        function bucket(ms) {
+          const age = Date.now() - ms;
+          if (age < 60 * 60 * 1000) return "Last hour";
+          const start = new Date();
+          start.setHours(0, 0, 0, 0);
+          if (ms >= start.getTime()) return "Earlier today";
+          if (ms >= start.getTime() - 86400000) return "Yesterday";
+          return "Older";
+        }
+
+        function pct(p) {
+          const v = p * 100;
+          if (v < 1) return "<1%";
+          return `${v >= 10 ? Math.round(v) : v.toFixed(1)}%`;
+        }
+
+        function change(dayChange) {
+          if (dayChange === null || dayChange === undefined || Math.abs(dayChange) < 0.005) return null;
+          const pts = Math.round(dayChange * 1000) / 10;
+          return el("span", { class: `chg ${pts > 0 ? "up" : "down"}`, title: "Change in the last 24 hours" }, `${pts > 0 ? "▲" : "▼"}${Math.abs(pts)}`);
+        }
+
+        function headlines() {
+          const all = (view.feed?.headlines || []).filter((h) => h && h.title);
+          const q = view.query.trim().toLowerCase();
+          return all
+            .filter((h) => view.tab === "all" || h.category === view.tab)
+            .filter((h) => !q || `${h.title} ${h.who} ${h.source} ${h.text}`.toLowerCase().includes(q))
+            .sort((a, b) => (b.published || b.at) - (a.published || a.at));
+        }
+
+        function renderTabs() {
+          const counts = {};
+          for (const h of view.feed?.headlines || []) counts[h.category] = (counts[h.category] || 0) + 1;
+          const nav = $("tabs");
+          nav.replaceChildren(
+            ...TABS.map(([id, label]) => {
+              const n = id === "all" ? (view.feed?.headlines || []).length : counts[id];
+              return el(
+                "button",
+                {
+                  class: "tab",
+                  role: "tab",
+                  type: "button",
+                  "aria-selected": String(view.tab === id),
+                  onclick: () => {
+                    view.tab = id;
+                    store.set("nr-tab", id);
+                    history.replaceState(null, "", `#${id}`);
+                    render();
+                    window.scrollTo({ top: 0 });
+                  },
+                },
+                label,
+                n ? el("span", { class: "count" }, n) : null
+              );
+            })
+          );
+        }
+
+        function storyNode(h) {
+          const cat = CATS[h.category] || { label: h.category, color: "var(--muted)" };
+          const href = safeUrl(h.link);
+          const isTrump = h.category === "trump";
+          const who = h.who && h.who !== cat.label ? h.who : "";
+          const title = isTrump ? (h.title.startsWith("RT @") ? `Trump re-posted ${h.title.slice(3)}` : "Trump posted on Truth Social") : h.title;
+          const body = el(
+            "div",
+            {},
+            el(
+              "div",
+              { class: "meta" },
+              el("span", { class: "cat", style: `--dot:${cat.color}` }, cat.label),
+              who ? el("span", {}, who) : null,
+              h.source && h.source !== who ? el("span", {}, `· ${h.source}`) : null,
+              h.hot ? el("span", { class: "hot", title: "Could move markets" }, "⚡ Market-moving") : null
+            ),
+            el("p", { class: "headline" }, title),
+            isTrump && h.text ? el("p", { class: "post" }, h.text) : null
+          );
+          const time = el("time", { datetime: new Date(h.published || h.at).toISOString() }, storyTime(h));
+          return href
+            ? el("a", { class: "story", href, target: "_blank", rel: "noopener noreferrer" }, time, body)
+            : el("div", { class: "story" }, time, body);
+        }
+
+        function renderFeed(target) {
+          const list = headlines();
+          const parts = [];
+          parts.push(
+            el("input", {
+              id: "search",
+              class: "search",
+              type: "search",
+              placeholder: "Search headlines, people, sources…",
+              value: view.query,
+              "aria-label": "Search headlines",
+              oninput: (e) => {
+                view.query = e.target.value;
+                renderFeedOnly();
+              },
+            })
+          );
+          if (view.error && !view.feed) {
+            parts.push(el("div", { class: "empty" }, view.error));
+          } else if (!view.feed) {
+            parts.push(el("div", { class: "empty" }, "Loading the latest news…"));
+          } else if (!list.length) {
+            parts.push(
+              el(
+                "div",
+                { class: "empty" },
+                view.query ? `No headlines match “${view.query}”.` : "No stories here yet. The bot checks for news every 15 minutes."
+              )
+            );
+          } else {
+            const groups = new Map();
+            for (const h of list.slice(0, 150)) {
+              const key = bucket(h.published || h.at);
+              if (!groups.has(key)) groups.set(key, []);
+              groups.get(key).push(h);
+            }
+            for (const [name, items] of groups) {
+              parts.push(el("div", { class: "group" }, el("h2", {}, name), items.map(storyNode)));
+            }
+          }
+          target.replaceChildren(...parts);
+        }
+
+        function renderFeedOnly() {
+          const feed = $("feed");
+          const input = document.getElementById("search");
+          const caret = input ? input.selectionStart : null;
+          renderFeed(feed);
+          const next = document.getElementById("search");
+          if (next && caret !== null) {
+            next.focus();
+            next.setSelectionRange(caret, caret);
+          }
+        }
+
+        function oddsCard(s) {
+          const href = safeUrl(s.url);
+          const single = s.markets.length === 1;
+          return el(
+            "article",
+            { class: "odds" },
+            el("h3", {}, href ? el("a", { href, target: "_blank", rel: "noopener noreferrer" }, s.title) : s.title),
+            s.markets.slice(0, 4).map((m) =>
+              el(
+                "div",
+                { class: "outcome" },
+                el("span", { class: "label", title: m.question }, single ? "Yes" : m.label),
+                el("span", {}, el("span", { class: "pct" }, pct(m.probability)), change(m.dayChange)),
+                el("div", { class: "track", "aria-hidden": "true" }, el("div", { class: "fill", style: `width:${Math.max(1, Math.round(m.probability * 100))}%` }))
+              )
+            ),
+            el("div", { class: "vol" }, `$${Number(s.volume24h || 0).toLocaleString()} traded in 24 h`)
+          );
+        }
+
+        function moveNode(m) {
+          const href = safeUrl(m.url);
+          const up = m.deltaPts > 0;
+          const inner = [
+            el("b", { style: `color:var(${up ? "--up" : "--down"})` }, `${up ? "+" : ""}${Math.round(m.deltaPts)} pts`),
+            el("span", {}, `${m.question} now ${pct(m.to)} (was ${pct(m.from)}) · ${ago(m.at)}`),
+          ];
+          return href ? el("a", { class: "move", href, target: "_blank", rel: "noopener noreferrer" }, inner) : el("div", { class: "move" }, inner);
+        }
+
+        function renderOdds(target, compact) {
+          const scenarios = view.feed?.scenarios || [];
+          const moves = (view.feed?.oddsMoves || []).slice(0, 6);
+          const title = el("h2", { class: "section-title" }, "What could happen", compact && scenarios.length ? el("a", { href: "#odds", onclick: (e) => { e.preventDefault(); view.tab = "odds"; store.set("nr-tab", "odds"); render(); window.scrollTo({ top: 0 }); } }, "All odds") : null);
+          if (!scenarios.length) {
+            target.append(el("section", {}, title, el("div", { class: "empty" }, "Odds appear after the bot's next run.")));
+            return;
+          }
+          const section = el("section", {}, title);
+          if (!compact && moves.length) section.append(el("h2", { class: "section-title" }, "Big odds moves"), el("div", { class: "moves" }, moves.map(moveNode)));
+          const cards = (compact ? scenarios.slice(0, 4) : scenarios).map(oddsCard);
+          section.append(compact ? el("div", {}, cards) : el("div", { class: "grid-odds" }, cards));
+          target.append(section);
+        }
+
+        function renderEvents(target, compact) {
+          const now = Date.now();
+          const events = (view.feed?.events || []).filter((e) => e.time >= now - 60 * 60 * 1000).sort((a, b) => a.time - b.time);
+          const section = el("section", {}, el("h2", { class: "section-title" }, "Coming up"));
+          if (!events.length) {
+            section.append(el("div", { class: "empty" }, "No market-moving releases left this week. Next week's calendar arrives on Sunday."));
+            target.append(section);
+            return;
+          }
+          const box = el("div", { class: "events" });
+          let lastDay = "";
+          for (const e of compact ? events.slice(0, 8) : events) {
+            const day = dayFmt.format(e.time);
+            if (day !== lastDay) {
+              box.append(el("div", { class: "day" }, day));
+              lastDay = day;
+            }
+            const nums = [e.forecast ? `forecast ${e.forecast}` : "", e.previous ? `prev ${e.previous}` : ""].filter(Boolean).join(" · ");
+            box.append(
+              el(
+                "div",
+                { class: "event" },
+                el("time", { datetime: new Date(e.time).toISOString() }, timeFmt.format(e.time)),
+                el(
+                  "div",
+                  {},
+                  el("div", { class: "name" }, el("span", { class: `impact ${String(e.impact).toLowerCase() === "high" ? "" : "medium"}`, title: `${e.impact} impact` }), `${FLAGS[e.country] || "🌐"} ${e.title}`),
+                  nums ? el("div", { class: "nums" }, nums) : null
+                )
+              )
+            );
+          }
+          section.append(box);
+          target.append(section);
+        }
+
+        function renderStatus() {
+          const status = $("status");
+          const text = $("status-text");
+          if (!view.feed) {
+            text.textContent = view.error ? "Offline" : "Loading…";
+            status.classList.toggle("stale", Boolean(view.error));
+            return;
+          }
+          const generated = Date.parse(view.feed.generatedAt);
+          const stale = Date.now() - generated > STALE_MS;
+          status.classList.toggle("stale", stale || Boolean(view.error));
+          text.replaceChildren(
+            el("span", { class: "label-long" }, view.error ? "Offline · " : "Updated "),
+            ago(generated)
+          );
+          status.title = `Last update ${new Date(generated).toLocaleString()}`;
+        }
+
+        function render() {
+          renderTabs();
+          renderStatus();
+          const main = $("main");
+          const feed = $("feed");
+          const rail = $("rail");
+          rail.replaceChildren();
+          if (view.tab === "odds") {
+            main.classList.remove("split");
+            feed.replaceChildren();
+            renderOdds(feed, false);
+            rail.hidden = true;
+          } else if (view.tab === "events") {
+            main.classList.remove("split");
+            feed.replaceChildren();
+            renderEvents(feed, false);
+            rail.hidden = true;
+          } else {
+            main.classList.add("split");
+            renderFeed(feed);
+            rail.hidden = false;
+            renderOdds(rail, true);
+            renderEvents(rail, true);
+          }
+          if (installHint()) feed.prepend(installHint());
+        }
+
+        let hintNode = null;
+        function installHint() {
+          if (hintNode) return hintNode.isConnected ? null : hintNode;
+          const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+          const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+          if (!ios || standalone || store.get("nr-hint") === "done") return null;
+          hintNode = el(
+            "div",
+            { class: "note", role: "note" },
+            el("span", {}, "Add News Radar to your Home Screen: tap the Share button, then “Add to Home Screen”."),
+            el("button", { type: "button", onclick: () => { store.set("nr-hint", "done"); hintNode.remove(); } }, "Dismiss")
+          );
+          return hintNode;
+        }
+
+        async function load() {
+          const button = $("refresh");
+          button.classList.add("spin");
+          try {
+            const res = await fetch(`feed.json?ts=${Date.now()}`, { cache: "no-store" });
+            if (!res.ok) throw new Error(res.status === 404 ? "No news yet. The first update arrives within 15 minutes." : `The news feed answered HTTP ${res.status}.`);
+            view.feed = await res.json();
+            view.error = res.headers.get("x-news-radar-cache") ? "offline" : "";
+          } catch (err) {
+            view.error = err instanceof TypeError ? "You're offline. Showing the last news this device saved." : err.message;
+          } finally {
+            button.classList.remove("spin");
+            render();
+          }
+        }
+
+        $("refresh").addEventListener("click", load);
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "visible" && (!view.feed || Date.now() - Date.parse(view.feed.generatedAt) > 60 * 1000)) load();
+        });
+        setInterval(() => {
+          if (document.visibilityState === "visible") load();
+        }, REFRESH_MS);
+        setInterval(renderStatus, 30 * 1000);
+
+        let deferredPrompt = null;
+        window.addEventListener("beforeinstallprompt", (e) => {
+          e.preventDefault();
+          deferredPrompt = e;
+          $("install").hidden = false;
+        });
+        $("install").addEventListener("click", async () => {
+          if (!deferredPrompt) return;
+          deferredPrompt.prompt();
+          await deferredPrompt.userChoice.catch(() => null);
+          deferredPrompt = null;
+          $("install").hidden = true;
+        });
+
+        if ("serviceWorker" in navigator && location.protocol === "https:") {
+          navigator.serviceWorker.register("sw.js").catch(() => {
+            /* offline support is optional */
+          });
+        }
+
+        render();
+        load();
+      })();
+    </script>
+  </body>
+</html>

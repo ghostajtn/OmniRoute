@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -21,6 +21,7 @@ import {
   upcomingHighImpact,
   yesProbability,
 } from "../lib/markets.mjs";
+import { buildFeed, compactScenario, writeFeed } from "../lib/feed.mjs";
 import { buildOutlookPrompt, generateOutlook, isOutlookConfigured } from "../lib/outlook.mjs";
 import { parseFeed, stripHtml } from "../lib/rss.mjs";
 import { buildFeedList, isMarketMoving } from "../lib/sources.mjs";
@@ -31,6 +32,7 @@ import {
   loadState,
   markSeen,
   pruneState,
+  rememberHeadline,
   saveState,
 } from "../lib/state.mjs";
 
@@ -468,6 +470,14 @@ test("runCycle posts news, odds and calendar once, then nothing new on the next 
       forecast: "150K",
       previous: "142K",
     },
+    {
+      title: "Pending Home Sales m/m",
+      country: "USD",
+      impact: "Medium",
+      date: "2026-09-26T14:00:00Z",
+      forecast: "0.4%",
+      previous: "-1.1%",
+    },
   ]);
   const httpGet = async (url) => {
     if (url.includes("polymarket")) return JSON.stringify([polymarketEvent()]);
@@ -497,6 +507,26 @@ test("runCycle posts news, odds and calendar once, then nothing new on the next 
   );
   assert.ok(posted.some((p) => p.content?.includes("What could happen")));
   assert.ok(posted.some((p) => p.embeds.some((e) => e.description?.includes("Non-Farm"))));
+  assert.ok(
+    !posted.some((p) => p.embeds.some((e) => e.description?.includes("Pending Home Sales"))),
+    "Discord only gets high-impact events"
+  );
+
+  // What the web app's feed.json is built from.
+  assert.equal(state.recentHeadlines.length, 1);
+  assert.equal(state.recentHeadlines[0].hot, true);
+  assert.equal(state.recentHeadlines[0].link, "https://news.test/a");
+  assert.deepEqual(
+    state.latestScenarios.map((s) => s.url),
+    ["https://polymarket.com/event/fed-decision-in-october"]
+  );
+  assert.deepEqual(
+    state.calendarEvents.map((e) => [e.title, e.impact]),
+    [
+      ["Non-Farm Employment Change", "High"],
+      ["Pending Home Sales m/m", "Medium"],
+    ]
+  );
 
   posted.length = 0;
   const second = await runCycle(config, state, {
@@ -508,4 +538,84 @@ test("runCycle posts news, odds and calendar once, then nothing new on the next 
   assert.equal(second.digest, false);
   assert.equal(second.calendar, 0);
   assert.equal(posted.length, 0);
+});
+
+// ── Web app feed ─────────────────────────────────────────────────────────────
+
+test("rememberHeadline keeps what the app needs, including Truth Social post text", () => {
+  const state = emptyState();
+  rememberHeadline(state, newsItem("Fed cuts rates", "markets", 3, { hot: true }), NOW);
+  rememberHeadline(
+    state,
+    newsItem("RT @someone", "trump", 1, {
+      summary: "RT @someone big news",
+      feedName: "Truth Social",
+    }),
+    NOW
+  );
+  const [story, post] = state.recentHeadlines;
+  assert.equal(story.hot, true);
+  assert.equal(story.link, "https://news.test/Fed%20cuts%20rates");
+  assert.equal(story.source, "Test");
+  assert.equal(story.text, "", "only Truth Social posts carry their text");
+  assert.equal(post.text, "RT @someone big news");
+  assert.equal(post.who, "Truth Social");
+});
+
+test("compactScenario keeps the top four outcomes with rounded odds", () => {
+  const [scenario] = summarizeEvents([polymarketEvent()], { now: NOW });
+  const compact = compactScenario({
+    ...scenario,
+    volume24h: 1234.6,
+    markets: [...scenario.markets, ...scenario.markets, ...scenario.markets],
+  });
+  assert.equal(compact.volume24h, 1235);
+  assert.equal(compact.markets.length, 4);
+  assert.deepEqual(compact.markets[0], {
+    label: "25 bps cut",
+    question: "Will the Fed cut 25 bps?",
+    probability: 0.62,
+    dayChange: 0.05,
+  });
+});
+
+test("buildFeed lists newest headlines first and only upcoming events", () => {
+  const state = emptyState();
+  state.recentHeadlines = [{ title: "older" }, { title: "newer" }];
+  state.recentOddsMoves = [{ question: "first" }, { question: "second" }];
+  state.calendarEvents = [
+    { title: "long gone", time: NOW - 5 * HOUR },
+    { title: "just happened", time: NOW - HOUR },
+    { title: "tomorrow", time: NOW + 24 * HOUR },
+    { title: "far away", time: NOW + 9 * 24 * HOUR },
+  ];
+  state.lastOutlook = { text: "Rates stay high", at: NOW };
+  const feed = buildFeed(state, NOW);
+  assert.equal(feed.version, 1);
+  assert.equal(feed.generatedAt, new Date(NOW).toISOString());
+  assert.deepEqual(
+    feed.headlines.map((h) => h.title),
+    ["newer", "older"]
+  );
+  assert.deepEqual(
+    feed.oddsMoves.map((m) => m.question),
+    ["second", "first"]
+  );
+  assert.deepEqual(
+    feed.events.map((e) => e.title),
+    ["just happened", "tomorrow"]
+  );
+  assert.equal(feed.outlook.text, "Rates stay high");
+});
+
+test("writeFeed writes the feed as JSON, creating the folder", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "news-feed-"));
+  try {
+    const file = join(dir, "site", "feed.json");
+    const feed = buildFeed(emptyState(), NOW);
+    await writeFeed(file, feed);
+    assert.deepEqual(JSON.parse(await readFile(file, "utf8")), feed);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
