@@ -392,6 +392,45 @@
         color: var(--muted);
         margin-bottom: 3px;
       }
+      .meta .new {
+        color: var(--accent);
+        font-weight: 700;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .newbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: -6px 0 16px;
+        padding: 8px 12px;
+        border-radius: 10px;
+        background: var(--accent-soft);
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .newbar button {
+        border: 0;
+        background: none;
+        padding: 4px 0;
+        font: inherit;
+        color: var(--accent);
+        cursor: pointer;
+      }
+      .more {
+        display: block;
+        width: 100%;
+        margin-top: 18px;
+        padding: 10px;
+        border: 1px solid var(--rule);
+        border-radius: 10px;
+        background: var(--surface);
+        font: 600 13px/1.2 var(--sans);
+        color: var(--accent);
+        cursor: pointer;
+      }
       .cat {
         display: inline-flex;
         align-items: center;
@@ -705,7 +744,8 @@
         const REFRESH_MS = 5 * 60 * 1000;
         const STALE_MS = 45 * 60 * 1000;
 
-        const view = { feed: null, tab: "all", query: "", error: "" };
+        const PAGE = 150;
+        const view = { feed: null, tab: "all", query: "", error: "", limit: PAGE };
         const $ = (id) => document.getElementById(id);
 
         const store = {
@@ -797,6 +837,28 @@
           return el("span", { class: `chg ${pts > 0 ? "up" : "down"}`, title: "Change in the last 24 hours" }, `${pts > 0 ? "▲" : "▼"}${Math.abs(pts)}`);
         }
 
+        // Stories posted since the last visit are marked "New". The mark is remembered per
+        // device when the page is left, so a first visit shows none.
+        let lastVisit = Number(store.get("nr-last-visit")) || 0;
+        function newestStory() {
+          return Math.max(0, ...(view.feed?.headlines || []).map((h) => Number(h.at) || 0));
+        }
+        function isNew(h) {
+          return lastVisit > 0 && Number(h.at) > lastVisit;
+        }
+        function markAllRead() {
+          if (!view.feed) return;
+          lastVisit = newestStory();
+          store.set("nr-last-visit", String(lastVisit));
+        }
+        function rememberVisit() {
+          if (view.feed) store.set("nr-last-visit", String(newestStory()));
+        }
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "hidden") rememberVisit();
+        });
+        window.addEventListener("pagehide", rememberVisit);
+
         function headlines() {
           const all = (view.feed?.headlines || []).filter((h) => h && h.title);
           const q = view.query.trim().toLowerCase();
@@ -822,10 +884,12 @@
                   "aria-selected": String(view.tab === id),
                   onclick: () => {
                     view.tab = id;
+                    view.limit = PAGE;
                     store.set("nr-tab", id);
                     history.replaceState(null, "", `#${id}`);
                     render();
                     window.scrollTo({ top: 0 });
+                    $("tabs").querySelector('.tab[aria-selected="true"]')?.focus({ preventScroll: true });
                   },
                 },
                 label,
@@ -833,6 +897,13 @@
               );
             })
           );
+          // Keep the selected tab in view when the tab bar scrolls sideways (phones).
+          const current = nav.querySelector('.tab[aria-selected="true"]');
+          if (current) {
+            const bar = nav.getBoundingClientRect();
+            const box = current.getBoundingClientRect();
+            if (box.left < bar.left || box.right > bar.right) nav.scrollLeft += box.left - bar.left - 16;
+          }
         }
 
         function storyNode(h) {
@@ -848,6 +919,7 @@
             el(
               "div",
               { class: "meta" },
+              isNew(h) ? el("span", { class: "new" }, "New") : null,
               el("span", { class: "cat", style: `--dot:${cat.color}` }, cat.label),
               who ? el("span", {}, who) : null,
               h.source && h.source !== who ? el("span", {}, `· ${h.source}`) : null,
@@ -892,14 +964,34 @@
               )
             );
           } else {
+            const fresh = view.query ? 0 : list.filter(isNew).length;
+            if (fresh) {
+              parts.push(
+                el(
+                  "div",
+                  { class: "newbar", role: "status" },
+                  `${fresh} new since your last visit`,
+                  el("button", { type: "button", onclick: () => { markAllRead(); render(); } }, "Mark all read")
+                )
+              );
+            }
             const groups = new Map();
-            for (const h of list.slice(0, 150)) {
+            for (const h of list.slice(0, view.limit)) {
               const key = bucket(h.published || h.at);
               if (!groups.has(key)) groups.set(key, []);
               groups.get(key).push(h);
             }
             for (const [name, items] of groups) {
               parts.push(el("div", { class: "group" }, el("h2", {}, name), items.map(storyNode)));
+            }
+            if (list.length > view.limit) {
+              parts.push(
+                el(
+                  "button",
+                  { class: "more", type: "button", onclick: () => { view.limit += PAGE; renderFeedOnly(); } },
+                  `Show ${Math.min(PAGE, list.length - view.limit)} older stories`
+                )
+              );
             }
           }
           target.replaceChildren(...parts);
