@@ -32,7 +32,7 @@ import {
 import { buildFeed, compactScenario, writeFeed } from "../lib/feed.mjs";
 import { buildOutlookPrompt, generateOutlook, isOutlookConfigured } from "../lib/outlook.mjs";
 import { parseFeed, stripHtml } from "../lib/rss.mjs";
-import { buildFeedList, isMarketMoving } from "../lib/sources.mjs";
+import { NEWS_FEEDS, OFFICIAL_FEEDS, buildFeedList, isMarketMoving } from "../lib/sources.mjs";
 import {
   emptyState,
   isSeen,
@@ -130,6 +130,25 @@ test("isMarketMoving flags tariff/rate/earnings style headlines only", () => {
   assert.equal(isMarketMoving("Trump announces new tariffs on EU cars"), true);
   assert.equal(isMarketMoving("Fed signals rate cut in December"), true);
   assert.equal(isMarketMoving("Local bakery wins award"), false);
+  assert.equal(isMarketMoving("Federal Reserve issues FOMC statement"), true);
+});
+
+test("official feeds come straight from the Fed, the White House and the ECB", () => {
+  assert.ok(OFFICIAL_FEEDS.every((f) => f.category === "official" && NEWS_FEEDS.includes(f)));
+  assert.deepEqual([...new Set(OFFICIAL_FEEDS.map((f) => new URL(f.url).hostname))].sort(), [
+    "www.ecb.europa.eu",
+    "www.federalreserve.gov",
+    "www.whitehouse.gov",
+  ]);
+  const actions = OFFICIAL_FEEDS.find((f) => f.id === "white-house-actions");
+  for (const ceremonial of [
+    "Gold Star Mother’s And Family’s Day, 2026",
+    "National Hispanic Heritage Month, 2026",
+    "Presidential Message on National Hunting and Fishing Day",
+  ]) {
+    assert.equal(actions.exclude.test(ceremonial), true, ceremonial);
+  }
+  assert.equal(actions.exclude.test("Adjusting Imports of Steel into the United States"), false);
 });
 
 test("resolveSources honours NEWS_BOT_EXTRA_PEOPLE and NEWS_BOT_DISABLE", async () => {
@@ -546,6 +565,39 @@ test("runCycle posts news, odds and calendar once, then nothing new on the next 
   assert.equal(second.digest, false);
   assert.equal(second.calendar, 0);
   assert.equal(posted.length, 0);
+});
+
+test("runCycle skips ceremonial White House posts and labels official statements", async () => {
+  const httpGet = async (url) => {
+    if (url.includes("polymarket")) return "[]";
+    if (url.includes("faireconomy")) return "[]";
+    if (!url.includes("presidential-actions")) return rss([]);
+    return rss([
+      { title: "National Farm Safety Week, 2026", link: "https://wh.test/p", at: NOW - 60_000 },
+      {
+        title: "Imposing Tariffs on Imported Trucks",
+        link: "https://wh.test/eo",
+        at: NOW - 60_000,
+      },
+    ]);
+  };
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "" }, ["--once"]);
+  const summary = await runCycle(config, emptyState(), { httpGet, discord, now: () => NOW });
+  assert.equal(summary.news, 1);
+  const embeds = posted.flatMap((p) => p.embeds);
+  assert.deepEqual(
+    embeds.map((e) => [e.title, e.author.name]),
+    [["⚡ Imposing Tariffs on Imported Trucks", "🏛️ White House · Presidential actions"]]
+  );
+  assert.ok(posted.some((p) => p.username.endsWith("Official Statements")));
 });
 
 test("outputMode: without a webhook the bot still updates the app's feed", () => {

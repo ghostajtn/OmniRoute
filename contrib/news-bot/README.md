@@ -9,6 +9,7 @@ News Radar posts news to a Discord channel through a webhook. It needs no depend
 | 💹 **Markets & Business**      | CNBC, MarketWatch, Google News Business, Seeking Alpha                                                                                                            | every run       |
 | 🗣️ **Watchlist**               | Coverage of what market movers say and do: Trump, Musk, Buffett, the Fed, the Treasury Secretary, Dimon, Ackman, Burry, Dalio, Cathie Wood, Fink and Jensen Huang | every run       |
 | 🇺🇸 **Trump on Truth Social**   | Trump's own posts and re-posts                                                                                                                                    | every run       |
+| 🏛️ **Official Statements**     | Straight from the source: Fed policy statements, speeches and testimony, White House releases and presidential actions, and ECB press releases                    | every run       |
 | 🔮 **What Could Happen**       | Live prediction-market odds on the biggest open questions (Fed decisions, elections, wars, recession…), from Polymarket                                           | digest every 6h |
 | 🔮 **Odds shift**              | Alert when a market's odds move ≥10 points                                                                                                                        | when it happens |
 | 📅 **Market-Moving Events**    | High-impact economic releases in the next 36h (CPI, jobs report, FOMC, central-bank speeches) with forecast and previous values                                   | once a day      |
@@ -92,26 +93,26 @@ a day of backlog. After that, it posts every new story.
 
 ## 3. Options (environment variables)
 
-| Variable                                   | Default                                | Meaning                                                                                  |
-| ------------------------------------------ | -------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `DISCORD_WEBHOOK_URL`                      | — (required)                           | Where to post                                                                            |
-| `NEWS_BOT_EXTRA_PEOPLE`                    | —                                      | More people to follow, comma-separated, e.g. `Nancy Pelosi, Tim Cook`                    |
-| `NEWS_BOT_DISABLE`                         | —                                      | Sections to turn off: `breaking,world,markets,people,trump,predictions,calendar,outlook` |
-| `NEWS_BOT_INTERVAL_MINUTES`                | `10`                                   | Loop interval when running forever                                                       |
-| `NEWS_BOT_MAX_AGE_HOURS`                   | `24`                                   | Ignore stories older than this                                                           |
-| `NEWS_BOT_MAX_PER_CATEGORY`                | `15`                                   | Most stories per section per run; the rest are posted on the next run                    |
-| `NEWS_BOT_FIRST_RUN_PER_CATEGORY`          | `3`                                    | Stories per section on the very first run                                                |
-| `NEWS_BOT_PREDICTIONS_EVERY_HOURS`         | `6`                                    | How often to post the "What could happen" odds digest                                    |
-| `NEWS_BOT_PREDICTIONS_COUNT`               | `8`                                    | How many questions the digest shows                                                      |
-| `NEWS_BOT_ODDS_ALERT_POINTS`               | `10`                                   | Percentage-point move that triggers an "Odds shift" alert                                |
-| `NEWS_BOT_MARKET_TAGS`                     | `politics,economy,finance,geopolitics` | Polymarket topics to follow (e.g. add `crypto`)                                          |
-| `NEWS_BOT_TIMEZONE`                        | `America/New_York`                     | Time zone for the calendar                                                               |
-| `NEWS_BOT_NAME`                            | `News Radar`                           | Name the bot posts under                                                                 |
-| `NEWS_BOT_STATE_FILE`                      | `contrib/news-bot/.state/state.json`   | Where the bot remembers what it already posted                                           |
-| `NEWS_BOT_FEED_FILE`                       | —                                      | Where to write `feed.json` for the web app after each cycle                              |
-| `NEWS_BOT_CONFIG`                          | —                                      | Path to a JSON file with extra feeds and people (see below)                              |
-| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | —                                      | Turn on the 🧠 AI outlook (see below)                                                    |
-| `NEWS_BOT_OUTLOOK_EVERY_HOURS`             | `6`                                    | How often to post the AI outlook                                                         |
+| Variable                                   | Default                                | Meaning                                                                                           |
+| ------------------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `DISCORD_WEBHOOK_URL`                      | — (required)                           | Where to post                                                                                     |
+| `NEWS_BOT_EXTRA_PEOPLE`                    | —                                      | More people to follow, comma-separated, e.g. `Nancy Pelosi, Tim Cook`                             |
+| `NEWS_BOT_DISABLE`                         | —                                      | Sections to turn off: `breaking,world,markets,people,official,trump,predictions,calendar,outlook` |
+| `NEWS_BOT_INTERVAL_MINUTES`                | `10`                                   | Loop interval when running forever                                                                |
+| `NEWS_BOT_MAX_AGE_HOURS`                   | `24`                                   | Ignore stories older than this                                                                    |
+| `NEWS_BOT_MAX_PER_CATEGORY`                | `15`                                   | Most stories per section per run; the rest are posted on the next run                             |
+| `NEWS_BOT_FIRST_RUN_PER_CATEGORY`          | `3`                                    | Stories per section on the very first run                                                         |
+| `NEWS_BOT_PREDICTIONS_EVERY_HOURS`         | `6`                                    | How often to post the "What could happen" odds digest                                             |
+| `NEWS_BOT_PREDICTIONS_COUNT`               | `8`                                    | How many questions the digest shows                                                               |
+| `NEWS_BOT_ODDS_ALERT_POINTS`               | `10`                                   | Percentage-point move that triggers an "Odds shift" alert                                         |
+| `NEWS_BOT_MARKET_TAGS`                     | `politics,economy,finance,geopolitics` | Polymarket topics to follow (e.g. add `crypto`)                                                   |
+| `NEWS_BOT_TIMEZONE`                        | `America/New_York`                     | Time zone for the calendar                                                                        |
+| `NEWS_BOT_NAME`                            | `News Radar`                           | Name the bot posts under                                                                          |
+| `NEWS_BOT_STATE_FILE`                      | `contrib/news-bot/.state/state.json`   | Where the bot remembers what it already posted                                                    |
+| `NEWS_BOT_FEED_FILE`                       | —                                      | Where to write `feed.json` for the web app after each cycle                                       |
+| `NEWS_BOT_CONFIG`                          | —                                      | Path to a JSON file with extra feeds and people (see below)                                       |
+| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | —                                      | Turn on the 🧠 AI outlook (see below)                                                             |
+| `NEWS_BOT_OUTLOOK_EVERY_HOURS`             | `6`                                    | How often to post the AI outlook                                                                  |
 
 On GitHub Actions, set `NEWS_BOT_EXTRA_PEOPLE`, `NEWS_BOT_DISABLE` and `NEWS_BOT_LLM_MODEL` as repository
 **variables**. Set `NEWS_BOT_LLM_BASE_URL` and `NEWS_BOT_LLM_API_KEY` as repository **secrets**.
@@ -119,7 +120,7 @@ On GitHub Actions, set `NEWS_BOT_EXTRA_PEOPLE`, `NEWS_BOT_DISABLE` and `NEWS_BOT
 ### Add your own feeds and people
 
 Copy `sources.example.json`, edit it, and point `NEWS_BOT_CONFIG` at your copy. Each feed needs a `category`,
-which must be one of `breaking`, `world`, `markets` or `people`. Each person can have a
+which must be one of `breaking`, `world`, `markets`, `people` or `official`. Each person can have a
 [Google News search](https://support.google.com/news/publisher-center/answer/9606702) `query`. Without one, the
 bot searches for the person's name in quotes. Set `"replaceDefaults": true` to use only your own lists.
 
@@ -146,6 +147,8 @@ node --test contrib/news-bot/test/*.test.mjs
 
 - Google News RSS. Google allows it for personal, non-commercial use.
 - BBC, NPR, Al Jazeera, CNBC, MarketWatch and Seeking Alpha public RSS feeds.
+- The Federal Reserve, White House and European Central Bank public RSS feeds. Ceremonial White House posts, such as
+  proclamations of national days, are skipped.
 - [trumpstruth.org](https://www.trumpstruth.org), a public archive of Truth Social posts.
 - The [Polymarket](https://polymarket.com) public Gamma API.
 - The Forex Factory weekly economic calendar (`nfs.faireconomy.media`). The bot fetches it once a day.

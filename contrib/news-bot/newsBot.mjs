@@ -50,7 +50,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const HOUR_MS = 60 * 60 * 1000;
 const USER_AGENT = "Mozilla/5.0 (compatible; NewsRadarBot/1.0; +https://github.com/)";
 // Watchlist first so a story about a tracked person is labelled with their name.
-const CATEGORY_ORDER = ["trump", "people", "breaking", "markets", "world"];
+const CATEGORY_ORDER = ["trump", "official", "people", "breaking", "markets", "world"];
 
 function log(message) {
   console.log(`[${new Date().toISOString()}] ${message}`);
@@ -143,7 +143,9 @@ async function mapLimit(items, limit, fn) {
 async function fetchAllFeeds(feeds, httpGet) {
   const perFeed = await mapLimit(feeds, 4, async (feed) => {
     try {
-      const items = parseFeed(await httpGet(feed.url));
+      const items = parseFeed(await httpGet(feed.url)).filter(
+        (item) => !feed.exclude?.test(item.title)
+      );
       return items.map((item) => ({
         ...item,
         category: feed.category,
