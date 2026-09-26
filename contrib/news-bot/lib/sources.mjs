@@ -95,20 +95,52 @@ export const TRUMP_FEED = {
 
 // People whose words move markets. `query` is a Google News search; the bot adds
 // a 1-day time window. Add your own with NEWS_BOT_EXTRA_PEOPLE="Name, Other Name".
+// A story is only kept when its headline `mentions` the person (by default, their last
+// name): searches also return pages that merely mention them somewhere in the text.
 export const WATCHLIST = [
-  { name: "Donald Trump", query: '"Trump" (says OR said OR announces OR warns OR threatens)' },
-  { name: "Elon Musk", query: '"Elon Musk"' },
-  { name: "Warren Buffett", query: '"Warren Buffett" OR "Berkshire Hathaway"' },
-  { name: "Federal Reserve", query: '"Fed chair" OR "Federal Reserve" (rates OR says)' },
-  { name: "US Treasury", query: '"Treasury Secretary"' },
-  { name: "Jamie Dimon", query: '"Jamie Dimon"' },
-  { name: "Bill Ackman", query: '"Bill Ackman"' },
-  { name: "Michael Burry", query: '"Michael Burry"' },
-  { name: "Ray Dalio", query: '"Ray Dalio"' },
-  { name: "Cathie Wood", query: '"Cathie Wood"' },
-  { name: "Larry Fink", query: '"Larry Fink"' },
-  { name: "Jensen Huang", query: '"Jensen Huang"' },
+  {
+    name: "Donald Trump",
+    query: '"Trump" (says OR said OR announces OR warns OR threatens)',
+    mentions: ["Trump"],
+  },
+  { name: "Elon Musk", query: '"Elon Musk"', mentions: ["Musk"] },
+  {
+    name: "Warren Buffett",
+    query: '"Warren Buffett" OR "Berkshire Hathaway"',
+    mentions: ["Buffett", "Berkshire"],
+  },
+  {
+    name: "Federal Reserve",
+    query: '"Fed chair" OR "Federal Reserve" (rates OR says)',
+    mentions: ["Fed", "Federal Reserve", "Powell", "FOMC"],
+  },
+  {
+    name: "US Treasury",
+    query: '"Treasury Secretary"',
+    mentions: ["Bessent", "Treasury Secretary", "Treasury chief"],
+  },
+  { name: "Jamie Dimon", query: '"Jamie Dimon"', mentions: ["Dimon"] },
+  { name: "Bill Ackman", query: '"Bill Ackman"', mentions: ["Ackman", "Pershing Square"] },
+  { name: "Michael Burry", query: '"Michael Burry"', mentions: ["Burry"] },
+  { name: "Ray Dalio", query: '"Ray Dalio"', mentions: ["Dalio", "Bridgewater"] },
+  { name: "Cathie Wood", query: '"Cathie Wood"', mentions: ["Cathie Wood", "ARK Invest"] },
+  { name: "Larry Fink", query: '"Larry Fink"', mentions: ["Fink", "BlackRock"] },
+  { name: "Jensen Huang", query: '"Jensen Huang"', mentions: ["Huang"] },
 ];
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** A case-insensitive, whole-word match for any of the names (accented letters included). */
+export function mentionPattern(names) {
+  const alternatives = names.map((n) => escapeRegExp(n.trim()).replace(/\s+/g, "\\s+"));
+  return new RegExp(`(?<![\\p{L}\\p{N}])(?:${alternatives.join("|")})(?![\\p{L}\\p{N}])`, "iu");
+}
+
+/** Whether a story from this feed is worth keeping, judged by its headline. */
+export function feedAccepts(feed, title) {
+  if (feed.exclude?.test(title)) return false;
+  return !feed.mentions || feed.mentions.test(title);
+}
 
 export function googleNewsSearchUrl(query, window = "1d") {
   const q = `${query} when:${window}`;
@@ -120,12 +152,16 @@ export function buildFeedList({ feeds = NEWS_FEEDS, people = WATCHLIST, trump = 
   const list = [...feeds];
   if (trump) list.push(TRUMP_FEED);
   for (const person of people) {
+    const names = person.mentions?.length
+      ? person.mentions
+      : [person.name.trim().split(/\s+/).pop()];
     list.push({
       id: `person:${person.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
       category: "people",
       name: person.name,
       person: person.name,
       url: googleNewsSearchUrl(person.query || `"${person.name}"`),
+      mentions: mentionPattern(names),
     });
   }
   return list;

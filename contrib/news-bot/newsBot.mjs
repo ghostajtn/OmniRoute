@@ -37,6 +37,7 @@ import {
   NEWS_FEEDS,
   WATCHLIST,
   buildFeedList,
+  feedAccepts,
   isMarketMoving,
 } from "./lib/sources.mjs";
 import {
@@ -152,8 +153,8 @@ async function mapLimit(items, limit, fn) {
 async function fetchAllFeeds(feeds, httpGet) {
   const perFeed = await mapLimit(feeds, 4, async (feed) => {
     try {
-      const items = parseFeed(await httpGet(feed.url)).filter(
-        (item) => !feed.exclude?.test(item.title)
+      const items = parseFeed(await httpGet(feed.url)).filter((item) =>
+        feedAccepts(feed, item.title)
       );
       return items.map((item) => ({
         ...item,
