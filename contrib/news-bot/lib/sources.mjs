@@ -111,8 +111,8 @@ export const WATCHLIST = [
   },
   {
     name: "Federal Reserve",
-    query: '"Fed chair" OR "Federal Reserve" (rates OR says)',
-    mentions: ["Fed", "Federal Reserve", "Powell", "FOMC"],
+    query: '"Fed chair" OR "Kevin Warsh" OR "Federal Reserve" (rates OR says)',
+    mentions: ["Fed", "Federal Reserve", "FOMC", "Warsh"],
   },
   {
     name: "US Treasury",
