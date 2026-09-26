@@ -50,6 +50,10 @@ export function buildFeed(state, now = Date.now()) {
     ),
     outlook: state.lastOutlook || null,
     markets: state.marketQuotes || [],
+    // Sources that have been failing for hours, so the app can say what's missing.
+    downSources: Object.values(state.sourceHealth || {})
+      .filter((h) => h.down)
+      .map((h) => ({ name: h.name, since: h.since })),
   };
 }
 

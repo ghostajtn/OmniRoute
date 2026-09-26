@@ -33,6 +33,7 @@ export function emptyState() {
     lastCloseDay: "",
     lastBriefDay: "",
     lastWeekAheadDay: "",
+    sourceHealth: {},
   };
 }
 

@@ -152,7 +152,9 @@ async function mapLimit(items, limit, fn) {
   return results;
 }
 
+/** Fetch every feed; `failures` maps each feed that failed to its error message. */
 async function fetchAllFeeds(feeds, httpGet) {
+  const failures = new Map();
   const perFeed = await mapLimit(feeds, 4, async (feed) => {
     try {
       const items = parseFeed(await httpGet(feed.url)).filter((item) =>
@@ -165,11 +167,34 @@ async function fetchAllFeeds(feeds, httpGet) {
         person: feed.person,
       }));
     } catch (err) {
-      log(`⚠️  ${feed.name}: ${err.message}`);
+      failures.set(feed.id || feed.url, err.message);
       return [];
     }
   });
-  return perFeed.flat();
+  return { items: perFeed.flat(), failures };
+}
+
+// A source counts as down (logged, and listed in the app) after failing this long.
+const SOURCE_DOWN_AFTER_MS = 3 * HOUR_MS;
+
+/**
+ * Remember which sources are failing and since when; healthy ones drop off the list.
+ * Returns the sources that have just been down for SOURCE_DOWN_AFTER_MS.
+ */
+export function updateSourceHealth(state, feeds, failures, now) {
+  const before = state.sourceHealth || {};
+  const health = {};
+  const newlyDown = [];
+  for (const feed of feeds) {
+    const id = feed.id || feed.url;
+    if (!failures.has(id)) continue;
+    const since = before[id]?.since || now;
+    const down = now - since >= SOURCE_DOWN_AFTER_MS;
+    health[id] = { name: feed.name, since, error: failures.get(id), down };
+    if (down && !before[id]?.down) newlyDown.push(health[id]);
+  }
+  state.sourceHealth = health;
+  return newlyDown;
 }
 
 /**
@@ -530,11 +555,16 @@ export async function runCycle(config, state, deps) {
     brief: false,
     week: false,
     outlook: false,
+    failingSources: [],
     errors: [],
   };
 
   const feeds = await resolveSources(config);
-  const items = await fetchAllFeeds(feeds, deps.httpGet);
+  const { items, failures } = await fetchAllFeeds(feeds, deps.httpGet);
+  for (const source of updateSourceHealth(state, feeds, failures, now)) {
+    log(`❗ ${source.name} has been failing for 3 hours: ${source.error}`);
+  }
+  summary.failingSources = feeds.filter((f) => failures.has(f.id || f.url)).map((f) => f.name);
   const selected = selectNewItems(items, state, config, now);
   if (selected.trump) await describeMediaPosts(selected.trump, deps.httpGet);
   summary.news = await postNews(selected, config, state, deps.discord, now);
@@ -671,7 +701,8 @@ async function main() {
         `Cycle done${mode === "app-only" ? " (app only, nothing posted)" : ""}: ` +
           `${s.news} stories, ${s.oddsMoves} odds alerts, digest=${s.digest}, ` +
           `calendar=${s.calendar}, market alerts=${s.priceAlerts}, close=${s.close}, brief=${s.brief}, week=${s.week}, ` +
-          `outlook=${s.outlook}${s.errors.length ? `, ${s.errors.length} errors` : ""}`
+          `outlook=${s.outlook}${s.failingSources.length ? `, sources failed: ${s.failingSources.join(", ")}` : ""}` +
+          `${s.errors.length ? `, ${s.errors.length} errors` : ""}`
       );
     } catch (err) {
       log(`❌ Cycle failed: ${err.message}`);
