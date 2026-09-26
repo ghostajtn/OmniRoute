@@ -45,6 +45,7 @@ import {
   rememberHeadline,
   saveState,
 } from "./lib/state.mjs";
+import { describeMediaPosts, isMediaOnlyPost } from "./lib/truth.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOUR_MS = 60 * 60 * 1000;
@@ -220,8 +221,14 @@ export function newsEmbed(item) {
 
   if (isTruth) {
     const repost = item.title.match(/^RT @([\w.]+)/);
-    embed.title = `${hot ? "⚡ " : ""}${repost ? `Trump re-posted @${repost[1]}` : "Trump posted on Truth Social"}`;
-    embed.description = truncate(item.summary || item.title, 1500);
+    const media = { video: "🎥 Trump posted a video", photo: "📷 Trump posted a photo" };
+    const headline = repost
+      ? `Trump re-posted @${repost[1]}`
+      : media[item.mediaKind] || "Trump posted on Truth Social";
+    embed.title = `${hot ? "⚡ " : ""}${headline}`;
+    const text = item.summary || (isMediaOnlyPost(item) ? "" : item.title);
+    if (text) embed.description = truncate(text, 1500);
+    if (item.image) embed.image = { url: item.image };
   } else {
     embed.title = `${hot ? "⚡ " : ""}${item.title}`;
     const summary = item.summary && !isGoogle && item.summary !== item.title ? item.summary : "";
@@ -397,6 +404,7 @@ export async function runCycle(config, state, deps) {
   const feeds = await resolveSources(config);
   const items = await fetchAllFeeds(feeds, deps.httpGet);
   const selected = selectNewItems(items, state, config, now);
+  if (selected.trump) await describeMediaPosts(selected.trump, deps.httpGet);
   summary.news = await postNews(selected, config, state, deps.discord, now);
 
   let scenarios = [];

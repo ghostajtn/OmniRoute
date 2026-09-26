@@ -61,7 +61,9 @@ export function normalizeTitle(title) {
 
 export function itemKeys(item) {
   const keys = [];
-  const title = normalizeTitle(item.title);
+  // Titles catch one story carried by several feeds. Truth Social posts are unique by link,
+  // and their titles are often a placeholder ("[No Title] - Post from <date>").
+  const title = item.category === "trump" ? "" : normalizeTitle(item.title);
   if (title) keys.push(`t:${hash(title)}`);
   const id = item.guid || item.link;
   if (id) keys.push(`l:${hash(id)}`);
@@ -99,6 +101,7 @@ export function rememberHeadline(state, item, now = Date.now()) {
     hot: Boolean(item.hot),
     // Truth Social posts carry their text in the summary; other feeds only need the title.
     text: item.category === "trump" ? String(item.summary || "").slice(0, 600) : "",
+    ...(item.mediaKind ? { media: item.mediaKind } : {}),
     at: now,
   });
 }
