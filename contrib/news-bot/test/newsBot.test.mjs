@@ -512,6 +512,22 @@ test("pruneState forgets stories older than a few days", () => {
   assert.equal(isSeen(state, { title: "new", link: "https://a.test/new" }), true);
 });
 
+test("pruneState keeps two days of headlines, capped per section", () => {
+  const state = emptyState();
+  const add = (category, title, at) => rememberHeadline(state, newsItem(title, category, 0), at);
+  add("people", "stale", NOW - 3 * 24 * HOUR);
+  add("trump", "quiet section", NOW - 20 * HOUR);
+  for (let i = 0; i < 120; i++) add("people", `busy ${i}`, NOW - (120 - i) * 60_000);
+  pruneState(state, NOW);
+
+  const titles = state.recentHeadlines.map((h) => h.title);
+  assert.equal(titles.includes("stale"), false);
+  assert.equal(titles.includes("quiet section"), true, "a busy section can't push it out");
+  assert.equal(state.recentHeadlines.filter((h) => h.category === "people").length, 80);
+  assert.equal(titles.at(-1), "busy 119", "oldest first, newest kept");
+  assert.equal(titles.includes("busy 39"), false);
+});
+
 test("saveState/loadState round-trip and tolerate a missing file", async () => {
   const dir = await mkdtemp(join(tmpdir(), "news-bot-"));
   try {
