@@ -15,6 +15,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { buildBrief } from "./lib/brief.mjs";
 import { DiscordWebhook, isValidWebhookUrl, redactWebhook, truncate } from "./lib/discord.mjs";
 import { buildFeed, compactEvent, compactScenario, writeFeed } from "./lib/feed.mjs";
 import {
@@ -99,6 +100,7 @@ export function loadConfig(env = process.env, argv = process.argv.slice(2)) {
     extraPeople: list(env.NEWS_BOT_EXTRA_PEOPLE) || [],
     disabled: new Set(list(env.NEWS_BOT_DISABLE) || []),
     timeZone: env.NEWS_BOT_TIMEZONE || "America/New_York",
+    briefAt: /^\d{1,2}:\d{2}$/.test(env.NEWS_BOT_BRIEF_AT || "") ? env.NEWS_BOT_BRIEF_AT : "07:30",
     llmBaseUrl: env.LLM_BASE_URL || "",
     llmApiKey: env.LLM_API_KEY || "",
     llmModel: env.LLM_MODEL || "",
@@ -451,6 +453,22 @@ async function postPrices(config, state, deps, now) {
   return { alerts: moves.length, close };
 }
 
+// A brief that would go out more than this long after its time is skipped for the day.
+const BRIEF_WINDOW_MINUTES = 5 * 60;
+
+/** Post the morning brief once a day, at NEWS_BOT_BRIEF_AT local time or soon after. */
+async function postBrief(config, state, deps, now) {
+  const { day, hour, minute } = localDayAndHour(now, config.timeZone);
+  const [briefHour, briefMinute] = config.briefAt.split(":").map(Number);
+  const late = hour * 60 + minute - (briefHour * 60 + briefMinute);
+  if (state.lastBriefDay === day || late < 0 || late > BRIEF_WINDOW_MINUTES) return false;
+  const embeds = buildBrief(state, { now, timeZone: config.timeZone });
+  if (!embeds.length) return false;
+  await deps.discord.sendEmbeds(embeds, { username: `${config.username} • Morning Brief` });
+  state.lastBriefDay = day;
+  return true;
+}
+
 async function postOutlook(config, state, deps, scenarios, now) {
   if (!isOutlookConfigured(config)) return false;
   if (now - state.lastOutlookAt < config.outlookEveryHours * HOUR_MS) return false;
@@ -484,6 +502,7 @@ export async function runCycle(config, state, deps) {
     calendar: 0,
     priceAlerts: 0,
     close: false,
+    brief: false,
     outlook: false,
     errors: [],
   };
@@ -514,6 +533,7 @@ export async function runCycle(config, state, deps) {
         summary.close = result.close;
       },
     ],
+    ["brief", async () => (summary.brief = await postBrief(config, state, deps, now))],
     [
       "outlook",
       async () => (summary.outlook = await postOutlook(config, state, deps, scenarios, now)),
@@ -623,7 +643,7 @@ async function main() {
       log(
         `Cycle done${mode === "app-only" ? " (app only, nothing posted)" : ""}: ` +
           `${s.news} stories, ${s.oddsMoves} odds alerts, digest=${s.digest}, ` +
-          `calendar=${s.calendar}, market alerts=${s.priceAlerts}, close=${s.close}, ` +
+          `calendar=${s.calendar}, market alerts=${s.priceAlerts}, close=${s.close}, brief=${s.brief}, ` +
           `outlook=${s.outlook}${s.errors.length ? `, ${s.errors.length} errors` : ""}`
       );
     } catch (err) {

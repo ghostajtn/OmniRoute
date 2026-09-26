@@ -29,6 +29,7 @@ import {
   upcomingHighImpact,
   yesProbability,
 } from "../lib/markets.mjs";
+import { buildBrief, markdownLink } from "../lib/brief.mjs";
 import { buildFeed, compactScenario, writeFeed } from "../lib/feed.mjs";
 import { buildOutlookPrompt, generateOutlook, isOutlookConfigured } from "../lib/outlook.mjs";
 import { parseFeed, stripHtml } from "../lib/rss.mjs";
@@ -365,7 +366,7 @@ test("runCycle posts every photo and video post of the day, with its transcript"
   });
   const state = emptyState();
   state.initialized = true;
-  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "" }, ["--once"]);
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "", NEWS_BOT_DISABLE: "brief" }, ["--once"]);
   const summary = await runCycle(config, state, { httpGet, discord, now: () => NOW });
 
   assert.equal(summary.news, 2);
@@ -919,7 +920,7 @@ test("runCycle skips ceremonial White House posts and labels official statements
     },
     sleep: async () => {},
   });
-  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "" }, ["--once"]);
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "", NEWS_BOT_DISABLE: "brief" }, ["--once"]);
   const summary = await runCycle(config, emptyState(), { httpGet, discord, now: () => NOW });
   assert.equal(summary.news, 1);
   const embeds = posted.flatMap((p) => p.embeds);
@@ -980,6 +981,153 @@ test("app-only mode fills the app's feed and never calls Discord", async () => {
   // The story counts as seen, so it is not posted later once the webhook is added.
   const again = await runCycle(config, state, { httpGet, discord, now: () => NOW + 60_000 });
   assert.equal(again.news, 0);
+});
+
+// ── Morning brief ────────────────────────────────────────────────────────────
+
+function briefState() {
+  const state = emptyState();
+  const add = (title, category, hoursAgo, extra = {}) =>
+    rememberHeadline(state, newsItem(title, category, hoursAgo * 60, extra), NOW - hoursAgo * HOUR);
+  add("Oil jumps as OPEC cuts output", "markets", 20, { hot: true }); // before last night
+  add("Quiet top story", "breaking", 9);
+  add("Fed signals rate cut in December", "people", 8, { hot: true, person: "Federal Reserve" });
+  add("[Breaking] Stocks slide (again)", "markets", 3, { hot: true });
+  add("Another top story", "breaking", 2);
+  add("Trump posted on Truth Social", "trump", 6);
+  add("RT @someone", "trump", 1, {
+    summary: "We will win big on trade, bigger than anyone thought",
+  });
+  state.marketQuotes = parseSpark(
+    JSON.parse(spark(sparkQuote("^GSPC", 7743, 7704), sparkQuote("ES=F", 7804, 7767)))
+  );
+  const at = (iso) => Date.parse(iso);
+  state.calendarEvents = [
+    { title: "Core PCE", country: "USD", impact: "High", time: at("2026-09-25T10:00:00Z") },
+    {
+      title: "Pending Home Sales",
+      country: "USD",
+      impact: "Medium",
+      time: at("2026-09-25T16:00:00Z"),
+    },
+    { title: "Powell speaks", country: "USD", impact: "High", time: at("2026-09-25T17:00:00Z") },
+    {
+      title: "ISM Manufacturing",
+      country: "USD",
+      impact: "High",
+      time: at("2026-09-26T14:00:00Z"),
+    },
+  ];
+  const scenario = (id, markets) => ({
+    id,
+    title: `Question ${id}?`,
+    url: `https://pm.test/${id}`,
+    markets,
+  });
+  state.latestScenarios = [
+    scenario(1, [{ label: "Yes", probability: 0.17 }]),
+    scenario(2, [
+      { label: "No change", probability: 0.34 },
+      { label: "25 bps cut", probability: 0.65 },
+    ]),
+    scenario(3, [{ label: "Yes", probability: 0.5 }]),
+    scenario(4, [{ label: "Yes", probability: 0.9 }]),
+  ];
+  return state;
+}
+
+test("buildBrief sums up the night, the markets, today's calendar and the odds", () => {
+  const morning = Date.parse("2026-09-25T11:30:00Z"); // 7:30 in New York
+  const [news, markets, calendar, odds] = buildBrief(briefState(), { now: morning });
+  assert.equal(news.title, "☀️ Morning brief · Friday, September 25");
+  const lines = news.description.split("\n");
+  assert.deepEqual(lines.slice(0, 4), [
+    "• [Breaking Stocks slide (again)](https://news.test/%5BBreaking%5D%20Stocks%20slide%20(again%29) · Test Feed",
+    "• [Fed signals rate cut in December](https://news.test/Fed%20signals%20rate%20cut%20in%20December) · Federal Reserve",
+    "• [Another top story](https://news.test/Another%20top%20story) · Test Feed",
+    "• [Quiet top story](https://news.test/Quiet%20top%20story) · Test Feed",
+  ]);
+  assert.ok(!news.description.includes("OPEC"), "yesterday's news is not overnight news");
+  assert.match(
+    news.description,
+    /Trump posted 2 times on Truth Social overnight\. \[Latest\]\(.+\): “We will win big/
+  );
+  assert.equal(
+    markets.description,
+    "🟢 **S&P futures** 7,804 (+0.48%)",
+    "futures, not yesterday's close"
+  );
+  assert.match(calendar.description, /Powell speaks/);
+  assert.ok(
+    !/Core PCE|Pending|ISM/.test(calendar.description),
+    "only today's high-impact events still ahead"
+  );
+  assert.equal(
+    odds.description,
+    [
+      "• [Question 1?](https://pm.test/1): **Yes 17%**",
+      "• [Question 2?](https://pm.test/2): **25 bps cut 65%**",
+      "• [Question 3?](https://pm.test/3): **Yes 50%**",
+    ].join("\n")
+  );
+  assert.deepEqual(buildBrief(emptyState(), { now: morning }), [], "nothing to say yet");
+});
+
+test("buildBrief keeps whole stories within Discord's embed limit", () => {
+  const state = briefState();
+  for (let i = 0; i < 8; i++) {
+    rememberHeadline(
+      state,
+      {
+        ...newsItem(`Long link story ${i}`, "markets", 30, { hot: true }),
+        link: `https://news.test/${"x".repeat(700)}${i}`,
+      },
+      NOW - 30 * 60_000
+    );
+  }
+  const [news] = buildBrief(state, { now: NOW });
+  assert.ok(news.description.length <= 3800);
+  assert.ok(
+    news.description
+      .split("\n")
+      .every((line) => !line.startsWith("• ") || line.endsWith(" · Test Feed"))
+  );
+  assert.match(news.description, /Trump posted 2 times/, "the Trump line always fits");
+});
+
+test("markdownLink keeps headlines from breaking Discord links", () => {
+  assert.equal(markdownLink("A [b] c", "https://x.test/a(b)"), "[A b c](https://x.test/a(b%29)");
+  assert.equal(markdownLink("Plain", "javascript:alert(1)"), "Plain");
+});
+
+test("runCycle posts the morning brief once a day, from 7:30 until the window closes", async () => {
+  const httpGet = async (url) =>
+    url.includes("polymarket") || url.includes("finance.yahoo") ? "{}" : rss([]);
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "", NEWS_BOT_DISABLE: "calendar" }, [
+    "--once",
+  ]);
+  const state = briefState();
+  state.initialized = true;
+  const run = async (iso) =>
+    (await runCycle(config, state, { httpGet, discord, now: () => Date.parse(iso) })).brief;
+
+  assert.equal(await run("2026-09-25T11:20:00Z"), false, "7:20 is too early");
+  assert.equal(await run("2026-09-25T12:00:00Z"), true);
+  assert.equal(posted.at(-1).username, "News Radar • Morning Brief");
+  assert.equal(await run("2026-09-25T12:10:00Z"), false, "once a day");
+  assert.equal(await run("2026-09-26T17:40:00Z"), false, "1:40 pm is too late for a morning brief");
+
+  const custom = loadConfig({ NEWS_BOT_BRIEF_AT: "6:00" }, []);
+  assert.equal(custom.briefAt, "6:00");
+  assert.equal(loadConfig({ NEWS_BOT_BRIEF_AT: "soon" }, []).briefAt, "07:30");
 });
 
 // ── Web app feed ─────────────────────────────────────────────────────────────
