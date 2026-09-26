@@ -17,8 +17,9 @@ News Radar posts news to a Discord channel through a webhook. It needs no depend
 | 🧠 **AI Outlook** _(optional)_ | An LLM reads recent headlines and odds, then lists 5 things that could happen next and their likely market impact                                                                                                                                                 | every 6h                                     |
 
 The bot marks headlines that could move prices (tariffs, rate cuts, earnings, sanctions, crashes…) with ⚡.
-It drops duplicate stories that appear in more than one feed, never posts the same story twice, and disables @mentions
-so a headline can't ping your server.
+It drops duplicate stories that appear in more than one feed, including one story reworded by several outlets
+within 12 hours. It never posts the same story twice, and it disables @mentions so a headline can't ping your
+server. Trump's posts and official statements are always posted.
 
 > Prediction odds and AI outlooks are speculation, not financial advice.
 

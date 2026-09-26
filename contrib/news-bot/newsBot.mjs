@@ -30,6 +30,7 @@ import {
 import { generateOutlook, isOutlookConfigured } from "./lib/outlook.mjs";
 import { detectBigMoves, fetchQuotes, quoteLine } from "./lib/prices.mjs";
 import { parseFeed } from "./lib/rss.mjs";
+import { isSameStory, titleTokens } from "./lib/similar.mjs";
 import {
   CATEGORIES,
   NEWS_FEEDS,
@@ -53,6 +54,10 @@ const HOUR_MS = 60 * 60 * 1000;
 const USER_AGENT = "Mozilla/5.0 (compatible; NewsRadarBot/1.0; +https://github.com/)";
 // Watchlist first so a story about a tracked person is labelled with their name.
 const CATEGORY_ORDER = ["trump", "official", "people", "breaking", "markets", "world"];
+// Truth Social posts and official statements are always posted, even when outlets carry
+// the same story; everything else is checked against the last 12 hours of posts.
+const NEVER_MERGED = new Set(["trump", "official"]);
+const SAME_STORY_WINDOW_MS = 12 * HOUR_MS;
 
 function log(message) {
   console.log(`[${new Date().toISOString()}] ${message}`);
@@ -172,6 +177,9 @@ export function selectNewItems(items, state, config, now = Date.now()) {
   const inRun = new Set();
   const selected = {};
   const firstRun = !state.initialized;
+  const stories = state.recentHeadlines
+    .filter((h) => !NEVER_MERGED.has(h.category) && now - h.at < SAME_STORY_WINDOW_MS)
+    .map((h) => titleTokens(h.title));
 
   const byCategory = new Map(CATEGORY_ORDER.map((c) => [c, []]));
   for (const item of items) {
@@ -188,6 +196,15 @@ export function selectNewItems(items, state, config, now = Date.now()) {
       const keys = itemKeys(item);
       if (keys.some((k) => inRun.has(k))) continue;
       keys.forEach((k) => inRun.add(k));
+      if (!NEVER_MERGED.has(category)) {
+        // Another outlet's take on a story already posted (or picked this run).
+        const tokens = titleTokens(item.title);
+        if (stories.some((story) => isSameStory(story, tokens))) {
+          markSeen(state, item, now);
+          continue;
+        }
+        stories.push(tokens);
+      }
       fresh.push(item);
     }
     fresh.sort((a, b) => (b.published || 0) - (a.published || 0));
