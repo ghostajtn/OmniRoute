@@ -136,6 +136,13 @@ test("parseFeed picks up story pictures, https only, never videos", () => {
   );
   assert.equal(image('<media:thumbnail url="http://img.test/insecure.png"/>'), "");
   assert.equal(
+    image(
+      "<description>&lt;img src=&quot;https://img.test/a.jpg?w=300&amp;amp;h=200&quot;&gt;</description>"
+    ),
+    "https://img.test/a.jpg?w=300&h=200",
+    "both layers of escaping are undone"
+  );
+  assert.equal(
     image("<content:encoded><![CDATA[<img src='https://img.test/npr2.jpg'>]]></content:encoded>"),
     "https://img.test/npr2.jpg",
     "NPR puts single-quoted images in content:encoded"
@@ -525,6 +532,22 @@ test("describeMediaPosts fills in text-less posts from the archive and leaves th
   assert.match(embed.description, /Central Command/);
   assert.deepEqual(embed.image, { url: "https://cdn.test/p.jpg" });
   assert.equal(newsEmbed(items[1]).description, undefined, "no placeholder text in Discord");
+});
+
+test("describeMediaPosts reads several archive pages at once", async () => {
+  let inFlight = 0;
+  let most = 0;
+  const httpGet = async () => {
+    inFlight++;
+    most = Math.max(most, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    inFlight--;
+    return archivePage({ text: "Transcript" });
+  };
+  const items = Array.from({ length: 9 }, (_, i) => mediaPost(i + 1));
+  await describeMediaPosts(items, httpGet);
+  assert.equal(most, 4);
+  assert.ok(items.every((i) => i.summary === "Transcript"));
 });
 
 test("runCycle posts every photo and video post of the day, with its transcript", async () => {
