@@ -517,6 +517,26 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+      .outcome .value {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .outcome svg {
+        width: 40px;
+        height: 14px;
+        color: var(--muted);
+        overflow: visible;
+      }
+      .outcome svg.up {
+        color: var(--up);
+      }
+      .outcome svg.down {
+        color: var(--down);
+      }
+      .outcome .value .chg {
+        margin-left: 0;
+      }
       .outcome .pct {
         font: 500 13px/1 var(--mono);
         font-variant-numeric: tabular-nums;
@@ -1031,6 +1051,12 @@
           }
         }
 
+        function trendDir(values) {
+          const points = (values || []).map(Number).filter(Number.isFinite);
+          const delta = points.length > 1 ? points.at(-1) - points[0] : 0;
+          return delta > 0.005 ? "up" : delta < -0.005 ? "down" : "";
+        }
+
         function oddsCard(s) {
           const href = safeUrl(s.url);
           const single = s.markets.length === 1;
@@ -1043,7 +1069,7 @@
                 "div",
                 { class: "outcome" },
                 el("span", { class: "label", title: m.question }, single ? "Yes" : m.label),
-                el("span", {}, el("span", { class: "pct" }, pct(m.probability)), change(m.dayChange)),
+                el("span", { class: "value" }, sparkline(m.trend, trendDir(m.trend), { minSpan: 0.1, minPoints: 3 }), el("span", { class: "pct" }, pct(m.probability)), change(m.dayChange)),
                 el("div", { class: "track", "aria-hidden": "true" }, el("div", { class: "fill", style: `width:${Math.max(1, Math.round(m.probability * 100))}%` }))
               )
             ),
@@ -1126,13 +1152,19 @@
           return { dir: size > 0 ? "up" : size < 0 ? "down" : "", text: `${size > 0 ? "▲" : size < 0 ? "▼" : ""}${text}` };
         }
 
-        function sparkline(values, dir) {
+        // minSpan keeps small wiggles small: odds that go from 61% to 62% are a flat line.
+        function sparkline(values, dir, { minSpan = 0, minPoints = 2 } = {}) {
           const points = (values || []).map(Number).filter(Number.isFinite);
-          if (points.length < 2) return null;
+          if (points.length < minPoints) return null;
           const NS = "http://www.w3.org/2000/svg";
           const [w, h] = [46, 22];
-          const min = Math.min(...points);
-          const span = Math.max(...points) - min || 1;
+          let min = Math.min(...points);
+          let span = Math.max(...points) - min;
+          if (span < minSpan) {
+            min -= (minSpan - span) / 2;
+            span = minSpan;
+          }
+          span = span || 1;
           const svg = document.createElementNS(NS, "svg");
           svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
           svg.setAttribute("class", dir);

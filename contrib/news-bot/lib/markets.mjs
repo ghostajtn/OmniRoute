@@ -7,7 +7,10 @@ const CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
 export const DEFAULT_MARKET_TAGS = ["politics", "economy", "finance", "geopolitics"];
 
 // Short-lived or noisy markets that would spam the channel.
-const DEFAULT_EXCLUDE = /\btweets?\b|up or down|above _+ on/i;
+// Short-term price bets ("What will WTI Crude Oil hit in September?") just track the price,
+// which the market snapshot already shows, and would fire an odds alert on every swing.
+const DEFAULT_EXCLUDE =
+  /\btweets?\b|up or down|above _+ on|\bwhat will .{1,80}\bhit\b|\bwhat price will\b/i;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

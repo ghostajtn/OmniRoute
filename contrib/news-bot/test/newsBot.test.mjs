@@ -31,7 +31,7 @@ import {
   yesProbability,
 } from "../lib/markets.mjs";
 import { buildBrief, buildWeekAhead, markdownLink } from "../lib/brief.mjs";
-import { buildFeed, compactScenario, writeFeed } from "../lib/feed.mjs";
+import { buildFeed, compactScenario, recordOddsHistory, writeFeed } from "../lib/feed.mjs";
 import { buildOutlookPrompt, generateOutlook, isOutlookConfigured } from "../lib/outlook.mjs";
 import { parseFeed, stripHtml } from "../lib/rss.mjs";
 import {
@@ -656,6 +656,22 @@ test("summarizeEvents keeps open, not-about-to-expire markets sorted by odds", (
     s.markets.map((m) => m.id),
     ["a", "b"]
   );
+});
+
+test("summarizeEvents leaves out short-term price bets", () => {
+  const titles = summarizeEvents(
+    [
+      polymarketEvent(),
+      polymarketEvent({ id: "2", title: "What will WTI Crude Oil (WTI) hit in September 2026?" }),
+      polymarketEvent({ id: "3", title: "What price will Bitcoin hit in 2026?" }),
+      polymarketEvent({ id: "4", title: "Will Trump hit China with new tariffs?" }),
+    ],
+    { now: NOW }
+  ).map((s) => s.title);
+  assert.deepEqual(titles.sort(), [
+    "Fed decision in October?",
+    "Will Trump hit China with new tariffs?",
+  ]);
 });
 
 test("detectOddsMoves alerts on big swings and resets the baseline after alerting", () => {
@@ -1571,7 +1587,41 @@ test("compactScenario keeps the top four outcomes with rounded odds", () => {
     question: "Will the Fed cut 25 bps?",
     probability: 0.62,
     dayChange: 0.05,
+    trend: [],
   });
+});
+
+test("recordOddsHistory keeps an hourly reading per market for three days", () => {
+  const [scenario] = summarizeEvents([polymarketEvent()], { now: NOW });
+  const at = (minutes, probability) => ({
+    ...scenario,
+    markets: scenario.markets.map((m, i) => (i === 0 ? { ...m, probability } : m)),
+  });
+  let history = recordOddsHistory({}, [at(0, 0.6)], NOW);
+  history = recordOddsHistory(history, [at(20, 0.61)], NOW + 20 * 60_000);
+  history = recordOddsHistory(history, [at(56, 0.64)], NOW + 56 * 60_000);
+  assert.deepEqual(
+    history.a.map(([, p]) => p),
+    [0.6, 0.64],
+    "one reading an hour, give or take"
+  );
+  assert.deepEqual(Object.keys(history).sort(), ["a", "b"], "every market shown");
+
+  history = recordOddsHistory(history, [at(0, 0.7)], NOW + 4 * 24 * HOUR);
+  assert.deepEqual(
+    history.a.map(([, p]) => p),
+    [0.7],
+    "older than three days is dropped"
+  );
+  assert.deepEqual(recordOddsHistory(history, [], NOW), {}, "markets no longer shown are dropped");
+
+  const compact = compactScenario(scenario, {
+    a: [
+      [NOW, 0.6],
+      [NOW + HOUR, 0.62],
+    ],
+  });
+  assert.deepEqual(compact.markets[0].trend, [0.6, 0.62]);
 });
 
 test("buildFeed lists newest headlines first and only upcoming events", () => {
