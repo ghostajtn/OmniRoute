@@ -12,6 +12,7 @@ import {
   resolveSources,
   runCycle,
   selectNewItems,
+  updateSourceHealth,
 } from "../newsBot.mjs";
 import {
   DiscordWebhook,
@@ -1482,6 +1483,56 @@ test("runCycle posts the morning brief once a day, from 7:30 until the window cl
   const custom = loadConfig({ NEWS_BOT_BRIEF_AT: "6:00" }, []);
   assert.equal(custom.briefAt, "6:00");
   assert.equal(loadConfig({ NEWS_BOT_BRIEF_AT: "soon" }, []).briefAt, "07:30");
+});
+
+// ── Source health ────────────────────────────────────────────────────────────
+
+test("updateSourceHealth reports a source once it has been failing for 3 hours", () => {
+  const feeds = [
+    { id: "npr", name: "NPR", url: "https://npr.test" },
+    { id: "bbc", name: "BBC World", url: "https://bbc.test" },
+  ];
+  const state = emptyState();
+  const failing = (...ids) => new Map(ids.map((id) => [id, "HTTP 503"]));
+
+  assert.deepEqual(updateSourceHealth(state, feeds, failing("npr"), NOW), []);
+  assert.deepEqual(updateSourceHealth(state, feeds, failing("npr"), NOW + 2 * HOUR), []);
+  const down = updateSourceHealth(state, feeds, failing("npr", "bbc"), NOW + 3 * HOUR);
+  assert.deepEqual(
+    down.map((h) => h.name),
+    ["NPR"],
+    "reported once, when it crosses 3 hours"
+  );
+  assert.deepEqual(updateSourceHealth(state, feeds, failing("npr", "bbc"), NOW + 4 * HOUR), []);
+  assert.deepEqual(
+    buildFeed(state, NOW + 4 * HOUR).downSources,
+    [{ name: "NPR", since: NOW }],
+    "the app lists sources that are down, not ones with a blip"
+  );
+
+  updateSourceHealth(state, feeds, failing("bbc"), NOW + 5 * HOUR);
+  assert.deepEqual(Object.keys(state.sourceHealth), ["bbc"], "a recovered source drops off");
+  assert.deepEqual(buildFeed(state, NOW + 5 * HOUR).downSources, []);
+});
+
+test("runCycle names the sources that failed", async () => {
+  const httpGet = async (url) => {
+    if (url.includes("npr.org")) throw new Error("HTTP 503");
+    return url.includes("polymarket") ||
+      url.includes("faireconomy") ||
+      url.includes("finance.yahoo")
+      ? "{}"
+      : rss([]);
+  };
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async () => fakeResponse(200),
+    sleep: async () => {},
+  });
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "", NEWS_BOT_DISABLE: "brief" }, ["--once"]);
+  const state = emptyState();
+  const summary = await runCycle(config, state, { httpGet, discord, now: () => NOW });
+  assert.deepEqual(summary.failingSources, ["NPR"]);
+  assert.equal(state.sourceHealth.npr.error, "HTTP 503");
 });
 
 // ── Web app feed ─────────────────────────────────────────────────────────────

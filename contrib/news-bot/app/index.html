@@ -399,6 +399,11 @@
         text-transform: uppercase;
         letter-spacing: 0.06em;
       }
+      .note {
+        margin: -8px 0 14px;
+        font-size: 12px;
+        color: var(--muted);
+      }
       .newbar {
         display: flex;
         align-items: center;
@@ -977,6 +982,10 @@
               )
             );
           } else {
+            const down = (view.feed.downSources || []).map((s) => s.name).filter(Boolean);
+            if (down.length) {
+              parts.push(el("p", { class: "note" }, `Temporarily unavailable: ${down.join(", ")}. The rest of the news is up to date.`));
+            }
             const fresh = view.query ? 0 : list.filter(isNew).length;
             if (fresh) {
               parts.push(
