@@ -336,8 +336,14 @@ async function postPredictions(config, state, deps, now) {
   const { moves, baseline } = detectOddsMoves(tracked, state.oddsBaseline, {
     thresholdPts: config.oddsAlertPoints,
   });
-  state.oddsBaseline = baseline;
   state.latestScenarios = tracked.slice(0, 12).map(compactScenario);
+  if (moves.length) {
+    await discord.sendEmbeds(moves.slice(0, 10).map(oddsMoveEmbed), {
+      username: `${config.username} • ${CATEGORIES.predictions.label}`,
+    });
+  }
+  // Only once the alerts are out: a failed send is retried on the next run.
+  state.oddsBaseline = baseline;
   for (const move of moves) {
     state.recentOddsMoves.push({
       title: move.scenario.title,
@@ -347,11 +353,6 @@ async function postPredictions(config, state, deps, now) {
       to: move.to,
       deltaPts: Math.round(move.deltaPts * 10) / 10,
       at: now,
-    });
-  }
-  if (moves.length) {
-    await discord.sendEmbeds(moves.slice(0, 10).map(oddsMoveEmbed), {
-      username: `${config.username} • ${CATEGORIES.predictions.label}`,
     });
   }
 
@@ -414,7 +415,6 @@ async function postPrices(config, state, deps, now) {
   const footer = { text: "Day change · prices from Yahoo Finance, may be delayed" };
 
   const { moves, alerted } = detectBigMoves(quotes, state.priceAlerts, { now });
-  state.priceAlerts = alerted;
   if (moves.length) {
     await deps.discord.sendEmbeds(
       [
@@ -428,6 +428,8 @@ async function postPrices(config, state, deps, now) {
       { username }
     );
   }
+  // Only once the alert is out: a failed send is retried on the next run.
+  state.priceAlerts = alerted;
 
   const market = localDayAndHour(now, MARKET_TIME_ZONE);
   const sp500 = quotes.find((q) => q.symbol === "^GSPC");

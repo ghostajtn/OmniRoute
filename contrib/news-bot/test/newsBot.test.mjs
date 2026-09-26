@@ -308,6 +308,57 @@ test("detectBigMoves alerts once per day and direction, again only if the move d
   assert.deepEqual(later.alerted, {}, "old alerts are forgotten");
 });
 
+test("an alert that fails to reach Discord is sent again on the next run", async () => {
+  let odds = '["0.62","0.38"]';
+  const httpGet = async (url) => {
+    if (url.includes("finance.yahoo")) return spark(sparkQuote("^GSPC", 7500, 7700));
+    if (url.includes("polymarket")) {
+      const event = polymarketEvent();
+      event.markets[0] = { ...event.markets[0], outcomePrices: odds };
+      return JSON.stringify([event]);
+    }
+    return url.includes("faireconomy") ? "[]" : rss([]);
+  };
+  let down = false;
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      if (down) throw new Error("socket hang up");
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "", NEWS_BOT_DISABLE: "brief,calendar" }, [
+    "--once",
+  ]);
+  const state = emptyState();
+  state.initialized = true;
+  state.lastPredictionsAt = NOW; // no digest in the way
+  const run = (minutes) =>
+    runCycle(config, state, { httpGet, discord, now: () => NOW + minutes * 60_000 });
+
+  down = true;
+  const first = await run(0);
+  assert.equal(first.errors.length, 1, "the price alert failed");
+  assert.deepEqual(state.priceAlerts, {}, "…and is not recorded as sent");
+
+  down = false;
+  const second = await run(10);
+  assert.equal(second.priceAlerts, 1);
+  assert.ok(posted.some((p) => p.embeds.some((e) => e.title === "📊 Big market move")));
+
+  odds = '["0.85","0.15"]'; // +23 points
+  down = true;
+  const third = await run(20);
+  assert.equal(third.errors.length, 1, "the odds alert failed");
+  down = false;
+  posted.length = 0;
+  const fourth = await run(25);
+  assert.equal(fourth.oddsMoves, 1, "and is sent on the next run");
+  assert.ok(posted.some((p) => p.embeds.some((e) => e.author?.name === "🔮 Odds shift")));
+});
+
 test("runCycle posts the closing bell once per trading day, after 4:15 pm in New York", async () => {
   const friday = Date.parse("2026-09-25T20:30:00Z"); // 4:30 pm in New York
   const closeTime = Date.parse("2026-09-25T20:00:00Z");
