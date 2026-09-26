@@ -32,6 +32,7 @@ export function emptyState() {
     priceAlerts: {},
     lastCloseDay: "",
     lastBriefDay: "",
+    lastWeekAheadDay: "",
   };
 }
 

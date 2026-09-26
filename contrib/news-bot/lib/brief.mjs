@@ -108,3 +108,59 @@ export function buildBrief(state, { now = Date.now(), timeZone = "America/New_Yo
   }
   return embeds;
 }
+
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * The week ahead, posted on Sunday evenings: the coming week's high-impact releases,
+ * day by day, and the biggest open questions. [] when there is nothing to say.
+ */
+export function buildWeekAhead(state, { now = Date.now(), timeZone = "America/New_York" } = {}) {
+  const dayName = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+  const events = (state.calendarEvents || [])
+    .filter((e) => e.impact === "High" && e.time >= now && e.time < now + 7 * DAY_MS)
+    .sort((a, b) => a.time - b.time);
+  const lines = [];
+  let lastDay = "";
+  for (const e of events) {
+    const day = dayName.format(new Date(e.time));
+    if (day !== lastDay) {
+      lines.push(`${lines.length ? "\n" : ""}**${day}**`);
+      lastDay = day;
+    }
+    lines.push(formatCalendarLine(e, timeZone));
+  }
+  const embeds = [];
+  if (lines.length) {
+    let description = "";
+    for (const line of lines) {
+      if (description.length + line.length + 1 > MAX_DESCRIPTION) break;
+      description += `${description ? "\n" : ""}${line}`;
+    }
+    embeds.push({
+      color: CATEGORIES.calendar.color,
+      title: "🗓️ The week ahead: market-moving releases",
+      description,
+      footer: {
+        text: "Economic calendar · high-impact releases often move stocks, bonds and currencies",
+      },
+    });
+  }
+  const scenarios = (state.latestScenarios || []).slice(0, 5);
+  if (scenarios.length) {
+    embeds.push({
+      color: CATEGORIES.predictions.color,
+      title: "🔮 What could happen this week",
+      description: scenarios
+        .map((s) => `• ${markdownLink(s.title, s.url)}: **${leadingOutcome(s)}**`)
+        .join("\n"),
+      footer: { text: "Prediction-market odds, not financial advice" },
+    });
+  }
+  return embeds;
+}

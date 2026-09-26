@@ -29,7 +29,7 @@ import {
   upcomingHighImpact,
   yesProbability,
 } from "../lib/markets.mjs";
-import { buildBrief, markdownLink } from "../lib/brief.mjs";
+import { buildBrief, buildWeekAhead, markdownLink } from "../lib/brief.mjs";
 import { buildFeed, compactScenario, writeFeed } from "../lib/feed.mjs";
 import { buildOutlookPrompt, generateOutlook, isOutlookConfigured } from "../lib/outlook.mjs";
 import { parseFeed, stripHtml } from "../lib/rss.mjs";
@@ -1210,6 +1210,80 @@ test("buildBrief keeps whole stories within Discord's embed limit", () => {
       .every((line) => !line.startsWith("• ") || line.endsWith(" · Test Feed"))
   );
   assert.match(news.description, /Trump posted 2 times/, "the Trump line always fits");
+});
+
+function weekAheadState() {
+  const state = briefState();
+  const at = (iso) => Date.parse(iso);
+  state.calendarEvents = [
+    {
+      title: "FOMC Statement",
+      country: "USD",
+      impact: "High",
+      time: at("2026-09-30T18:00:00Z"),
+      forecast: "4.00%",
+    },
+    {
+      title: "ISM Manufacturing PMI",
+      country: "USD",
+      impact: "High",
+      time: at("2026-09-28T14:00:00Z"),
+    },
+    {
+      title: "JOLTS Job Openings",
+      country: "USD",
+      impact: "Medium",
+      time: at("2026-09-29T14:00:00Z"),
+    },
+    {
+      title: "Non-Farm Employment Change",
+      country: "USD",
+      impact: "High",
+      time: at("2026-10-02T12:30:00Z"),
+    },
+    { title: "Next week's CPI", country: "USD", impact: "High", time: at("2026-10-05T12:30:00Z") },
+  ];
+  return state;
+}
+
+test("buildWeekAhead lists next week's high-impact releases day by day, and the top odds", () => {
+  const sunday = Date.parse("2026-09-27T22:30:00Z"); // 6:30 pm in New York
+  const [calendar, odds] = buildWeekAhead(weekAheadState(), { now: sunday });
+  assert.equal(calendar.title, "🗓️ The week ahead: market-moving releases");
+  const lines = calendar.description.split("\n");
+  assert.equal(lines[0], "**Monday, Sep 28**");
+  assert.match(lines[1], /ISM Manufacturing PMI/);
+  assert.equal(lines[3], "**Wednesday, Sep 30**");
+  assert.match(lines[4], /FOMC Statement.*forecast \*\*4\.00%\*\*/);
+  assert.equal(lines[6], "**Friday, Oct 2**");
+  assert.ok(!/JOLTS|Next week's CPI/.test(calendar.description), "high impact, within 7 days");
+  assert.equal(odds.description.split("\n").length, 4, "the four open questions we know of");
+});
+
+test("runCycle posts the week ahead on Sunday evenings only, once", async () => {
+  const httpGet = async (url) =>
+    url.includes("polymarket") || url.includes("finance.yahoo") ? "{}" : rss([]);
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "", NEWS_BOT_DISABLE: "calendar,brief" }, [
+    "--once",
+  ]);
+  const state = weekAheadState();
+  state.initialized = true;
+  const run = async (iso) =>
+    (await runCycle(config, state, { httpGet, discord, now: () => Date.parse(iso) })).week;
+
+  assert.equal(await run("2026-09-26T22:30:00Z"), false, "Saturday");
+  assert.equal(await run("2026-09-27T21:00:00Z"), false, "Sunday 5 pm is too early");
+  assert.equal(await run("2026-09-27T22:30:00Z"), true);
+  assert.equal(posted.at(-1).username, "News Radar • Week Ahead");
+  assert.equal(await run("2026-09-27T23:30:00Z"), false, "once a week");
 });
 
 test("markdownLink keeps headlines from breaking Discord links", () => {

@@ -15,7 +15,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildBrief } from "./lib/brief.mjs";
+import { buildBrief, buildWeekAhead } from "./lib/brief.mjs";
 import { DiscordWebhook, isValidWebhookUrl, redactWebhook, truncate } from "./lib/discord.mjs";
 import { buildFeed, compactEvent, compactScenario, writeFeed } from "./lib/feed.mjs";
 import {
@@ -471,6 +471,21 @@ async function postBrief(config, state, deps, now) {
   return true;
 }
 
+/** Post the week ahead once a week, on Sunday from 6 pm local time. */
+async function postWeekAhead(config, state, deps, now) {
+  const { day, hour } = localDayAndHour(now, config.timeZone);
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: config.timeZone,
+    weekday: "short",
+  }).format(new Date(now));
+  if (weekday !== "Sun" || hour < 18 || state.lastWeekAheadDay === day) return false;
+  const embeds = buildWeekAhead(state, { now, timeZone: config.timeZone });
+  if (!embeds.length) return false;
+  await deps.discord.sendEmbeds(embeds, { username: `${config.username} • Week Ahead` });
+  state.lastWeekAheadDay = day;
+  return true;
+}
+
 async function postOutlook(config, state, deps, scenarios, now) {
   if (!isOutlookConfigured(config)) return false;
   if (now - state.lastOutlookAt < config.outlookEveryHours * HOUR_MS) return false;
@@ -505,6 +520,7 @@ export async function runCycle(config, state, deps) {
     priceAlerts: 0,
     close: false,
     brief: false,
+    week: false,
     outlook: false,
     errors: [],
   };
@@ -536,6 +552,7 @@ export async function runCycle(config, state, deps) {
       },
     ],
     ["brief", async () => (summary.brief = await postBrief(config, state, deps, now))],
+    ["week", async () => (summary.week = await postWeekAhead(config, state, deps, now))],
     [
       "outlook",
       async () => (summary.outlook = await postOutlook(config, state, deps, scenarios, now)),
@@ -645,7 +662,7 @@ async function main() {
       log(
         `Cycle done${mode === "app-only" ? " (app only, nothing posted)" : ""}: ` +
           `${s.news} stories, ${s.oddsMoves} odds alerts, digest=${s.digest}, ` +
-          `calendar=${s.calendar}, market alerts=${s.priceAlerts}, close=${s.close}, brief=${s.brief}, ` +
+          `calendar=${s.calendar}, market alerts=${s.priceAlerts}, close=${s.close}, brief=${s.brief}, week=${s.week}, ` +
           `outlook=${s.outlook}${s.errors.length ? `, ${s.errors.length} errors` : ""}`
       );
     } catch (err) {
