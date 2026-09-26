@@ -34,6 +34,7 @@ import { buildOutlookPrompt, generateOutlook, isOutlookConfigured } from "../lib
 import { parseFeed, stripHtml } from "../lib/rss.mjs";
 import { NEWS_FEEDS, OFFICIAL_FEEDS, buildFeedList, isMarketMoving } from "../lib/sources.mjs";
 import { detectBigMoves, formatMove, formatPrice, parseSpark, sparkUrl } from "../lib/prices.mjs";
+import { isSameStory, titleTokens } from "../lib/similar.mjs";
 import { describeMediaPosts, isMediaOnlyPost, parsePostPage } from "../lib/truth.mjs";
 import {
   emptyState,
@@ -693,6 +694,72 @@ test("selectNewItems: later runs skip seen, stale and duplicate stories; watchli
     selected.world.map((i) => i.title),
     ["fresh world story"]
   );
+});
+
+test("isSameStory matches one story reworded by different outlets, and nothing else", () => {
+  const same = (a, b) => isSameStory(titleTokens(a), titleTokens(b));
+  const hormuz = "Trump says he rejects Iran’s proposal to reopen Hormuz";
+  assert.equal(same(hormuz, "Trump rejects Iran proposal for deal to reopen Hormuz"), true);
+  assert.equal(
+    same(hormuz, "Trump says he rejected Iranian proposal to reopen Strait of Hormuz"),
+    true
+  );
+  assert.equal(
+    same(
+      "White House blocks CNN from traveling with Trump on Air Force One",
+      "Trump blocks CNN from traveling on Air Force One"
+    ),
+    true
+  );
+  assert.equal(
+    same(
+      "Trump predicts Cuba and US will make a deal",
+      "Cuba condemns US ‘collective punishment’ as Trump predicts deal"
+    ),
+    false,
+    "a new angle on a story is kept"
+  );
+  assert.equal(same("Fed cuts rates", "Fed cuts rates, stocks slide"), false, "too short to judge");
+  assert.equal(same("Stocks rise as Fed cuts rates", "Fed cuts rates by half a point"), false);
+});
+
+test("selectNewItems drops another outlet's take on a story already posted or picked", () => {
+  const state = emptyState();
+  state.initialized = true;
+  rememberHeadline(
+    state,
+    newsItem("Trump rejects Iran proposal for deal to reopen Hormuz", "world", 90),
+    NOW - 90 * 60_000
+  );
+  rememberHeadline(
+    state,
+    newsItem("Nvidia unveils new AI chip at conference", "markets", 60 * 13),
+    NOW - 13 * HOUR
+  );
+  const config = loadConfig({}, ["--once"]);
+  const items = [
+    newsItem("Trump says he rejects Iran’s proposal to reopen Hormuz", "breaking", 5),
+    newsItem("Musk says Tesla will cut prices in Europe", "people", 4),
+    newsItem("Tesla will cut prices in Europe, Musk says", "markets", 3),
+    newsItem("Nvidia unveils new AI chip at annual conference", "markets", 2),
+    {
+      ...newsItem("Trump rejects Iran proposal to reopen Hormuz", "official", 1),
+      feedName: "White House",
+    },
+  ];
+  const selected = selectNewItems(items, state, config, NOW);
+  assert.deepEqual(
+    Object.values(selected)
+      .flat()
+      .map((i) => [i.category, i.title]),
+    [
+      ["official", "Trump rejects Iran proposal to reopen Hormuz"],
+      ["people", "Musk says Tesla will cut prices in Europe"],
+      ["markets", "Nvidia unveils new AI chip at annual conference"],
+    ]
+  );
+  assert.equal(isSeen(state, items[0]), true, "a dropped duplicate is not checked again");
+  assert.equal(isSeen(state, items[2]), true);
 });
 
 test("newsEmbed flags market-moving headlines and formats Truth Social posts", () => {
