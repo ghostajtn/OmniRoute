@@ -10,6 +10,7 @@ export const CATEGORIES = {
   trump: { label: "Trump on Truth Social", emoji: "🇺🇸", color: 0xe67e22 },
   predictions: { label: "What Could Happen", emoji: "🔮", color: 0x1abc9c },
   calendar: { label: "Market-Moving Events", emoji: "📅", color: 0xf1c40f },
+  prices: { label: "Market Snapshot", emoji: "📊", color: 0x16a085 },
   outlook: { label: "AI Outlook", emoji: "🧠", color: 0x95a5a6 },
 };
 
