@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { loadConfig, newsEmbed, resolveSources, runCycle, selectNewItems } from "../newsBot.mjs";
+import {
+  createDiscord,
+  loadConfig,
+  newsEmbed,
+  outputMode,
+  resolveSources,
+  runCycle,
+  selectNewItems,
+} from "../newsBot.mjs";
 import {
   DiscordWebhook,
   chunkEmbeds,
@@ -538,6 +546,57 @@ test("runCycle posts news, odds and calendar once, then nothing new on the next 
   assert.equal(second.digest, false);
   assert.equal(second.calendar, 0);
   assert.equal(posted.length, 0);
+});
+
+test("outputMode: without a webhook the bot still updates the app's feed", () => {
+  const mode = (env, argv = ["--once"]) => outputMode(loadConfig(env, argv));
+  assert.equal(mode({ DISCORD_WEBHOOK_URL: WEBHOOK }), "discord");
+  assert.equal(mode({ DISCORD_WEBHOOK_URL: WEBHOOK, NEWS_BOT_FEED_FILE: "f.json" }), "discord");
+  assert.equal(mode({ NEWS_BOT_FEED_FILE: "f.json" }), "app-only");
+  assert.equal(mode({ DISCORD_WEBHOOK_URL: " " }), "none");
+  assert.equal(
+    mode({ NEWS_BOT_FEED_FILE: "f.json" }, ["--test"]),
+    "none",
+    "a test needs a webhook"
+  );
+  assert.equal(mode({ DISCORD_WEBHOOK_URL: WEBHOOK }, ["--once", "--dry-run"]), "dry-run");
+});
+
+test("app-only mode fills the app's feed and never calls Discord", async () => {
+  const httpGet = async (url) => {
+    if (url.includes("polymarket")) return JSON.stringify([polymarketEvent()]);
+    if (url.includes("faireconomy")) return "[]";
+    if (url.includes("trumpstruth")) return rss([]);
+    return rss([
+      { title: "Stocks plunge as yields jump", link: "https://news.test/a", at: NOW - 60_000 },
+    ]);
+  };
+  const config = loadConfig({ NEWS_BOT_FEED_FILE: "f.json", NEWS_BOT_EXTRA_PEOPLE: "" }, [
+    "--once",
+  ]);
+  let discordCalls = 0;
+  const discord = createDiscord(config, {
+    fetchImpl: async () => {
+      discordCalls++;
+      return fakeResponse(200);
+    },
+  });
+  const state = emptyState();
+
+  const summary = await runCycle(config, state, { httpGet, discord, now: () => NOW });
+  assert.equal(discordCalls, 0);
+  assert.equal(summary.news, 1);
+  assert.deepEqual(summary.errors, []);
+  const feed = buildFeed(state, NOW);
+  assert.deepEqual(
+    feed.headlines.map((h) => h.link),
+    ["https://news.test/a"]
+  );
+  assert.equal(feed.scenarios.length, 1);
+
+  // The story counts as seen, so it is not posted later once the webhook is added.
+  const again = await runCycle(config, state, { httpGet, discord, now: () => NOW + 60_000 });
+  assert.equal(again.news, 0);
 });
 
 // ── Web app feed ─────────────────────────────────────────────────────────────

@@ -7,6 +7,7 @@
 //   DISCORD_WEBHOOK_URL=... node contrib/news-bot/newsBot.mjs --once   # one cycle (cron / CI)
 //   node contrib/news-bot/newsBot.mjs --once --dry-run                 # print, don't post
 //   DISCORD_WEBHOOK_URL=... node contrib/news-bot/newsBot.mjs --test   # send a test message
+//   NEWS_BOT_FEED_FILE=feed.json node contrib/news-bot/newsBot.mjs --once  # no webhook: app feed only
 //
 // See contrib/news-bot/README.md for every option.
 
@@ -428,6 +429,27 @@ export async function runCycle(config, state, deps) {
   return summary;
 }
 
+/**
+ * Where this run's posts go: Discord, the console (--dry-run), or nowhere. Without a
+ * webhook the bot still reads the news when it has a feed file to write ("app-only"),
+ * so the web app keeps working while Discord is not set up.
+ */
+export function outputMode(config) {
+  if (config.dryRun) return "dry-run";
+  if (config.webhookUrl) return "discord";
+  return config.feedFile && !config.test ? "app-only" : "none";
+}
+
+/** The Discord client for this run. It only sends in "discord" mode. */
+export function createDiscord(config, { mode = outputMode(config), fetchImpl } = {}) {
+  return new DiscordWebhook(config.webhookUrl, {
+    dryRun: mode !== "discord",
+    log: mode === "app-only" ? () => {} : log,
+    gapMs: 2000,
+    fetchImpl,
+  });
+}
+
 async function sendTestMessage(config, discord) {
   await discord.send({
     username: config.username,
@@ -445,8 +467,9 @@ async function sendTestMessage(config, discord) {
 
 async function main() {
   const config = loadConfig();
+  const mode = outputMode(config);
 
-  if (!config.webhookUrl && !config.dryRun) {
+  if (mode === "none") {
     const msg = "DISCORD_WEBHOOK_URL is not set — nothing to do. See contrib/news-bot/README.md.";
     if (process.env.GITHUB_ACTIONS) {
       console.log(`::warning::${msg}`);
@@ -456,17 +479,19 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+  if (mode === "app-only") {
+    const msg =
+      "DISCORD_WEBHOOK_URL is not set, so nothing is posted to Discord; only the web app's " +
+      "feed is updated. See contrib/news-bot/README.md.";
+    console.log(process.env.GITHUB_ACTIONS ? `::warning::${msg}` : msg);
+  }
   if (config.webhookUrl && !isValidWebhookUrl(config.webhookUrl)) {
     console.error(`Not a Discord webhook URL: ${redactWebhook(config.webhookUrl)}`);
     process.exitCode = 1;
     return;
   }
 
-  const discord = new DiscordWebhook(config.webhookUrl, {
-    dryRun: config.dryRun,
-    log,
-    gapMs: 2000,
-  });
+  const discord = createDiscord(config, { mode });
   const deps = { discord, httpGet: createHttpGet(), fetchImpl: fetch };
 
   if (config.test) {
@@ -491,7 +516,8 @@ async function main() {
     try {
       const s = await runCycle(config, state, deps);
       log(
-        `Cycle done: ${s.news} stories, ${s.oddsMoves} odds alerts, digest=${s.digest}, ` +
+        `Cycle done${mode === "app-only" ? " (app only, nothing posted)" : ""}: ` +
+          `${s.news} stories, ${s.oddsMoves} odds alerts, digest=${s.digest}, ` +
           `calendar=${s.calendar}, outlook=${s.outlook}${s.errors.length ? `, ${s.errors.length} errors` : ""}`
       );
     } catch (err) {

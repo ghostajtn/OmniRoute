@@ -42,6 +42,11 @@ The workflow `.github/workflows/news-bot.yml` runs the bot every 15 minutes.
 
 The bot's memory of which stories it already posted is kept between runs in the Actions cache.
 
+If nothing arrives in Discord, open the latest **News Bot** run. The warning _"DISCORD_WEBHOOK_URL is not
+set"_ means the secret didn't reach the workflow. Check that it's listed under **Settings → Secrets and
+variables → Actions → Secrets → Repository secrets** with exactly that name. Variables, environment secrets,
+and Codespaces or Dependabot secrets don't count.
+
 ### The News Radar app
 
 Each run also publishes the News Radar web app (`contrib/news-bot/app/`) to GitHub Pages, together with a
@@ -56,7 +61,8 @@ live odds on what could happen, and the week's market-moving events.
    - Android (Chrome): tap **Install app** in the page, or **⋮ → Install app**.
 
 The app refreshes itself every 5 minutes while it's open. It also works offline with the last news it loaded.
-If Pages is off, the bot still posts to Discord; only the app step fails.
+If Pages is off, the bot still posts to Discord; only the app step fails. The app doesn't need the Discord
+secret: without it, each run still updates the app and posts nothing.
 
 Notes:
 
