@@ -892,6 +892,35 @@ test("selectNewItems drops another outlet's take on a story already posted or pi
   assert.equal(isSeen(state, items[2]), true);
 });
 
+test("a story held back for the next run doesn't suppress another outlet's version of it", () => {
+  const state = emptyState();
+  state.initialized = true;
+  const config = loadConfig({ NEWS_BOT_MAX_PER_CATEGORY: "1" }, ["--once"]);
+  const newest = newsItem("Musk says Tesla will build robots in Texas", "people", 1);
+  const heldBack = newsItem("Musk says SpaceX will launch Starship again next month", "people", 5);
+  const reworded = newsItem(
+    "SpaceX will launch Starship again next month, Musk says",
+    "breaking",
+    3
+  );
+  const first = selectNewItems([newest, heldBack, reworded], state, config, NOW);
+  assert.deepEqual(
+    Object.values(first)
+      .flat()
+      .map((i) => i.title),
+    [newest.title, reworded.title]
+  );
+  assert.equal(isSeen(state, heldBack), false, "it waits for the next run");
+  assert.equal(isSeen(state, reworded), false, "it is posted, not dropped");
+
+  // Once the reworded version is out, the held-back one is the duplicate.
+  rememberHeadline(state, reworded, NOW);
+  markSeen(state, newest, NOW);
+  markSeen(state, reworded, NOW);
+  assert.deepEqual(selectNewItems([heldBack], state, config, NOW + 60_000), {});
+  assert.equal(isSeen(state, heldBack), true);
+});
+
 test("newsEmbed flags market-moving headlines and formats Truth Social posts", () => {
   const hot = newsEmbed(
     newsItem("Trump slaps tariffs on chips", "people", 1, { person: "Donald Trump" })
