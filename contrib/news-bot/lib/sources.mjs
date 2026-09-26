@@ -59,6 +59,12 @@ export const NEWS_FEEDS = [
     url: "https://www.aljazeera.com/xml/rss/all.xml",
   },
   {
+    id: "wsj-world",
+    category: "world",
+    name: "WSJ World",
+    url: "https://feeds.content.dowjones.io/public/rss/RSSWorldNews",
+  },
+  {
     id: "cnbc",
     category: "markets",
     name: "CNBC",
@@ -69,6 +75,12 @@ export const NEWS_FEEDS = [
     category: "markets",
     name: "MarketWatch",
     url: "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+  },
+  {
+    id: "wsj-markets",
+    category: "markets",
+    name: "WSJ Markets",
+    url: "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain",
   },
   {
     id: "google-business",
