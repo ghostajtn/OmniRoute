@@ -130,16 +130,36 @@ export const WATCHLIST = [
 
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** A case-insensitive, whole-word match for any of the names (accented letters included). */
+/**
+ * A whole-word match for any of the names, accented letters included. Short names such
+ * as "Fed" or "FOMC" must match their capitals ("fed up" is not the Fed); longer names
+ * match in any case.
+ */
 export function mentionPattern(names) {
-  const alternatives = names.map((n) => escapeRegExp(n.trim()).replace(/\s+/g, "\\s+"));
-  return new RegExp(`(?<![\\p{L}\\p{N}])(?:${alternatives.join("|")})(?![\\p{L}\\p{N}])`, "iu");
+  const pattern = (list, flags) =>
+    list.length
+      ? new RegExp(
+          `(?<![\\p{L}\\p{N}])(?:${list
+            .map((n) => escapeRegExp(n.trim()).replace(/\s+/g, "\\s+"))
+            .join("|")})(?![\\p{L}\\p{N}])`,
+          flags
+        )
+      : null;
+  const exact = pattern(
+    names.filter((n) => n.trim().length <= 4),
+    "u"
+  );
+  const loose = pattern(
+    names.filter((n) => n.trim().length > 4),
+    "iu"
+  );
+  return { test: (text) => Boolean(exact?.test(text) || loose?.test(text)) };
 }
 
 /** Whether a story from this feed is worth keeping, judged by its headline. */
 export function feedAccepts(feed, title) {
-  if (feed.exclude?.test(title)) return false;
-  return !feed.mentions || feed.mentions.test(title);
+  if (typeof feed.exclude?.test === "function" && feed.exclude.test(title)) return false;
+  return typeof feed.mentions?.test !== "function" || feed.mentions.test(title);
 }
 
 export function googleNewsSearchUrl(query, window = "1d") {
@@ -152,9 +172,9 @@ export function buildFeedList({ feeds = NEWS_FEEDS, people = WATCHLIST, trump = 
   const list = [...feeds];
   if (trump) list.push(TRUMP_FEED);
   for (const person of people) {
-    const names = person.mentions?.length
-      ? person.mentions
-      : [person.name.trim().split(/\s+/).pop()];
+    // NEWS_BOT_CONFIG may give one name as a string, or junk; fall back to the last name.
+    const listed = [person.mentions].flat().filter((n) => typeof n === "string" && n.trim());
+    const names = listed.length ? listed : [person.name.trim().split(/\s+/).pop()];
     list.push({
       id: `person:${person.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
       category: "people",

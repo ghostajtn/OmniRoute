@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -173,14 +173,25 @@ test("buildFeedList adds a Google News search per watchlist person", () => {
   assert.equal(url.searchParams.get("q"), '"Warren Buffett" when:1d');
 });
 
-test("mentionPattern matches whole names only, in any case, accents included", () => {
+test("mentionPattern matches whole names only, accents included", () => {
   const fed = mentionPattern(["Fed", "Federal Reserve"]);
   assert.equal(fed.test("Fed holds rates steady"), true);
   assert.equal(fed.test("What the federal  reserve said"), true);
   assert.equal(fed.test("FedEx raises prices"), false);
   assert.equal(fed.test("Federal judge blocks order"), false);
-  assert.equal(mentionPattern(["Özil"]).test("özil signs"), true);
-  assert.equal(mentionPattern(["Özil"]).test("Özilx"), false);
+  assert.equal(
+    fed.test("Parents fed up with school lunch prices"),
+    false,
+    "short names keep their capitals"
+  );
+  assert.equal(mentionPattern(["Özil"]).test("Özil signs"), true);
+  assert.equal(mentionPattern(["Özil"]).test("özil signs"), false);
+  assert.equal(
+    mentionPattern(["Müller"]).test("müller signs"),
+    true,
+    "longer names match in any case"
+  );
+  assert.equal(mentionPattern(["Müller"]).test("Müllerx"), false);
   assert.equal(
     mentionPattern(["A.B. (C)"]).test("A.B. (C) wins"),
     true,
@@ -206,6 +217,52 @@ test("watchlist stories must name the person in the headline", () => {
     trump: false,
   });
   assert.equal(feedAccepts(plain, "Anything at all"), true, "news feeds take every story");
+});
+
+test("resolveSources copes with hand-written config mistakes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "news-bot-config-"));
+  try {
+    const file = join(dir, "sources.json");
+    await writeFile(
+      file,
+      JSON.stringify({
+        replaceDefaults: true,
+        feeds: [
+          {
+            id: "x",
+            category: "markets",
+            name: "X",
+            url: "https://x.test/rss",
+            exclude: "sponsored",
+          },
+        ],
+        people: [
+          { name: "Nancy Pelosi", mentions: "Pelosi" },
+          { query: "no name" },
+          { name: "  " },
+        ],
+      })
+    );
+    const feeds = await resolveSources(loadConfig({ NEWS_BOT_CONFIG: file }, []));
+    const pelosi = feeds.find((f) => f.person === "Nancy Pelosi");
+    assert.equal(
+      feedAccepts(pelosi, "Pelosi buys Nvidia calls"),
+      true,
+      "one name as a string works"
+    );
+    assert.equal(feedAccepts(pelosi, "Congress passes budget"), false);
+    assert.equal(feeds.filter((f) => f.category === "people").length, 1, "nameless people skipped");
+    assert.equal(
+      feedAccepts(
+        feeds.find((f) => f.id === "x"),
+        "Sponsored: buy now"
+      ),
+      true,
+      "a text exclude is ignored"
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("isMarketMoving flags tariff/rate/earnings style headlines only", () => {
