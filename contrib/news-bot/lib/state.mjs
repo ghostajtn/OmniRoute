@@ -34,6 +34,7 @@ export function emptyState() {
     lastBriefDay: "",
     lastWeekAheadDay: "",
     sourceHealth: {},
+    oddsHistory: {},
   };
 }
 

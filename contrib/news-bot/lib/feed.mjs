@@ -10,8 +10,32 @@ const DAY_MS = 24 * HOUR_MS;
 
 const round = (value, digits) => Math.round(value * 10 ** digits) / 10 ** digits;
 
-/** The subset of a prediction-market scenario the app shows. */
-export function compactScenario(scenario) {
+// Odds history for the app's trend lines: one reading an hour, for three days.
+const HISTORY_STEP_MS = HOUR_MS;
+const HISTORY_KEEP_MS = 3 * DAY_MS;
+
+/**
+ * Add this run's odds to the history of every market shown in the app, at most one
+ * reading an hour. Markets no longer shown are dropped, so the state file stays small.
+ */
+export function recordOddsHistory(history = {}, scenarios, now = Date.now()) {
+  const next = {};
+  for (const scenario of scenarios) {
+    for (const market of scenario.markets.slice(0, 4)) {
+      const points = (history[market.id] || []).filter(([at]) => now - at <= HISTORY_KEEP_MS);
+      const last = points.at(-1);
+      // A little slack, so an hourly schedule that runs a minute early still records.
+      if (!last || now - last[0] >= HISTORY_STEP_MS - 5 * 60 * 1000) {
+        points.push([now, round(market.probability, 3)]);
+      }
+      next[market.id] = points;
+    }
+  }
+  return next;
+}
+
+/** The subset of a prediction-market scenario the app shows, with each market's trend. */
+export function compactScenario(scenario, history = {}) {
   return {
     id: scenario.id,
     title: scenario.title,
@@ -22,6 +46,7 @@ export function compactScenario(scenario) {
       question: m.question,
       probability: round(m.probability, 4),
       dayChange: m.dayChange === null ? null : round(m.dayChange, 4),
+      trend: (history[m.id] || []).map(([, probability]) => probability),
     })),
   };
 }

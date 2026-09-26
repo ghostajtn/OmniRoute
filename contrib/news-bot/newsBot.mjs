@@ -17,7 +17,13 @@ import { fileURLToPath } from "node:url";
 
 import { buildBrief, buildWeekAhead } from "./lib/brief.mjs";
 import { DiscordWebhook, isValidWebhookUrl, redactWebhook, truncate } from "./lib/discord.mjs";
-import { buildFeed, compactEvent, compactScenario, writeFeed } from "./lib/feed.mjs";
+import {
+  buildFeed,
+  compactEvent,
+  compactScenario,
+  recordOddsHistory,
+  writeFeed,
+} from "./lib/feed.mjs";
 import {
   DEFAULT_MARKET_TAGS,
   detectOddsMoves,
@@ -367,7 +373,9 @@ async function postPredictions(config, state, deps, now) {
   const { moves, baseline } = detectOddsMoves(tracked, state.oddsBaseline, {
     thresholdPts: config.oddsAlertPoints,
   });
-  state.latestScenarios = tracked.slice(0, 12).map(compactScenario);
+  const shown = tracked.slice(0, 12);
+  state.oddsHistory = recordOddsHistory(state.oddsHistory, shown, now);
+  state.latestScenarios = shown.map((s) => compactScenario(s, state.oddsHistory));
   if (moves.length) {
     await discord.sendEmbeds(moves.slice(0, 10).map(oddsMoveEmbed), {
       username: `${config.username} • ${CATEGORIES.predictions.label}`,
