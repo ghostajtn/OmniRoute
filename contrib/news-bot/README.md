@@ -15,6 +15,7 @@ News Radar posts news to a Discord channel through a webhook. It needs no depend
 | 📅 **Market-Moving Events**    | High-impact economic releases in the next 36h (CPI, jobs report, FOMC, central-bank speeches) with forecast and previous values                                                                                                                                   | once a day                                   |
 | 📊 **Market Snapshot**         | The S&P 500, Nasdaq, Dow, S&P futures, VIX, 10-year yield, oil, gold, the dollar and bitcoin. Alerts on big moves (S&P or Dow ±2%, Nasdaq ±2.5%, VIX ±20%, 10-year ±15 bp, oil ±5%, gold ±3%, dollar ±1%, bitcoin ±5%), plus a closing-bell summary at 4:15 pm ET | alerts as they happen; close on trading days |
 | ☀️ **Morning Brief**           | Overnight market-moving stories, how often Trump posted, futures and other markets, today's high-impact releases and the top odds, in one post                                                                                                                    | daily at 7:30 am                             |
+| 🗓️ **Week Ahead**              | The coming week's high-impact releases (Fed decisions, CPI, jobs report…) day by day, plus the top prediction-market odds                                                                                                                                         | Sundays from 6 pm                            |
 | 🧠 **AI Outlook** _(optional)_ | An LLM reads recent headlines and odds, then lists 5 things that could happen next and their likely market impact                                                                                                                                                 | every 6h                                     |
 
 The bot marks headlines that could move prices (tariffs, rate cuts, earnings, sanctions, crashes…) with ⚡.
@@ -96,27 +97,27 @@ a day of backlog. After that, it posts every new story.
 
 ## 3. Options (environment variables)
 
-| Variable                                   | Default                                | Meaning                                                                                                        |
-| ------------------------------------------ | -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `DISCORD_WEBHOOK_URL`                      | — (required)                           | Where to post                                                                                                  |
-| `NEWS_BOT_EXTRA_PEOPLE`                    | —                                      | More people to follow, comma-separated, e.g. `Nancy Pelosi, Tim Cook`                                          |
-| `NEWS_BOT_DISABLE`                         | —                                      | Sections to turn off: `breaking,world,markets,people,official,trump,predictions,calendar,prices,brief,outlook` |
-| `NEWS_BOT_INTERVAL_MINUTES`                | `10`                                   | Loop interval when running forever                                                                             |
-| `NEWS_BOT_MAX_AGE_HOURS`                   | `24`                                   | Ignore stories older than this                                                                                 |
-| `NEWS_BOT_MAX_PER_CATEGORY`                | `15`                                   | Most stories per section per run; the rest are posted on the next run                                          |
-| `NEWS_BOT_FIRST_RUN_PER_CATEGORY`          | `3`                                    | Stories per section on the very first run                                                                      |
-| `NEWS_BOT_PREDICTIONS_EVERY_HOURS`         | `6`                                    | How often to post the "What could happen" odds digest                                                          |
-| `NEWS_BOT_PREDICTIONS_COUNT`               | `8`                                    | How many questions the digest shows                                                                            |
-| `NEWS_BOT_ODDS_ALERT_POINTS`               | `10`                                   | Percentage-point move that triggers an "Odds shift" alert                                                      |
-| `NEWS_BOT_MARKET_TAGS`                     | `politics,economy,finance,geopolitics` | Polymarket topics to follow (e.g. add `crypto`)                                                                |
-| `NEWS_BOT_TIMEZONE`                        | `America/New_York`                     | Time zone for the calendar and the morning brief                                                               |
-| `NEWS_BOT_BRIEF_AT`                        | `07:30`                                | When the morning brief goes out, in `NEWS_BOT_TIMEZONE` (skipped if the bot is more than 5 hours late)         |
-| `NEWS_BOT_NAME`                            | `News Radar`                           | Name the bot posts under                                                                                       |
-| `NEWS_BOT_STATE_FILE`                      | `contrib/news-bot/.state/state.json`   | Where the bot remembers what it already posted                                                                 |
-| `NEWS_BOT_FEED_FILE`                       | —                                      | Where to write `feed.json` for the web app after each cycle                                                    |
-| `NEWS_BOT_CONFIG`                          | —                                      | Path to a JSON file with extra feeds and people (see below)                                                    |
-| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | —                                      | Turn on the 🧠 AI outlook (see below)                                                                          |
-| `NEWS_BOT_OUTLOOK_EVERY_HOURS`             | `6`                                    | How often to post the AI outlook                                                                               |
+| Variable                                   | Default                                | Meaning                                                                                                             |
+| ------------------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `DISCORD_WEBHOOK_URL`                      | — (required)                           | Where to post                                                                                                       |
+| `NEWS_BOT_EXTRA_PEOPLE`                    | —                                      | More people to follow, comma-separated, e.g. `Nancy Pelosi, Tim Cook`                                               |
+| `NEWS_BOT_DISABLE`                         | —                                      | Sections to turn off: `breaking,world,markets,people,official,trump,predictions,calendar,prices,brief,week,outlook` |
+| `NEWS_BOT_INTERVAL_MINUTES`                | `10`                                   | Loop interval when running forever                                                                                  |
+| `NEWS_BOT_MAX_AGE_HOURS`                   | `24`                                   | Ignore stories older than this                                                                                      |
+| `NEWS_BOT_MAX_PER_CATEGORY`                | `15`                                   | Most stories per section per run; the rest are posted on the next run                                               |
+| `NEWS_BOT_FIRST_RUN_PER_CATEGORY`          | `3`                                    | Stories per section on the very first run                                                                           |
+| `NEWS_BOT_PREDICTIONS_EVERY_HOURS`         | `6`                                    | How often to post the "What could happen" odds digest                                                               |
+| `NEWS_BOT_PREDICTIONS_COUNT`               | `8`                                    | How many questions the digest shows                                                                                 |
+| `NEWS_BOT_ODDS_ALERT_POINTS`               | `10`                                   | Percentage-point move that triggers an "Odds shift" alert                                                           |
+| `NEWS_BOT_MARKET_TAGS`                     | `politics,economy,finance,geopolitics` | Polymarket topics to follow (e.g. add `crypto`)                                                                     |
+| `NEWS_BOT_TIMEZONE`                        | `America/New_York`                     | Time zone for the calendar and the morning brief                                                                    |
+| `NEWS_BOT_BRIEF_AT`                        | `07:30`                                | When the morning brief goes out, in `NEWS_BOT_TIMEZONE` (skipped if the bot is more than 5 hours late)              |
+| `NEWS_BOT_NAME`                            | `News Radar`                           | Name the bot posts under                                                                                            |
+| `NEWS_BOT_STATE_FILE`                      | `contrib/news-bot/.state/state.json`   | Where the bot remembers what it already posted                                                                      |
+| `NEWS_BOT_FEED_FILE`                       | —                                      | Where to write `feed.json` for the web app after each cycle                                                         |
+| `NEWS_BOT_CONFIG`                          | —                                      | Path to a JSON file with extra feeds and people (see below)                                                         |
+| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | —                                      | Turn on the 🧠 AI outlook (see below)                                                                               |
+| `NEWS_BOT_OUTLOOK_EVERY_HOURS`             | `6`                                    | How often to post the AI outlook                                                                                    |
 
 On GitHub Actions, set `NEWS_BOT_EXTRA_PEOPLE`, `NEWS_BOT_DISABLE` and `NEWS_BOT_LLM_MODEL` as repository
 **variables**. Set `NEWS_BOT_LLM_BASE_URL` and `NEWS_BOT_LLM_API_KEY` as repository **secrets**.
