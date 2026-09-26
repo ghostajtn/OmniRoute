@@ -53,7 +53,9 @@ export function buildBrief(state, { now = Date.now(), timeZone = "America/New_Yo
   const lines = [];
   let length = trump.length;
   for (const h of top) {
-    const line = `• ${markdownLink(h.title, h.link)} · ${h.who || h.source}`;
+    // The person for watchlist stories, otherwise the outlet (not "Google News").
+    const credit = h.category === "people" ? h.who : h.source || h.who;
+    const line = `• ${markdownLink(h.title, h.link)} · ${credit}`;
     if (length + line.length + 1 > MAX_DESCRIPTION) break;
     lines.push(line);
     length += line.length + 1;
@@ -75,8 +77,9 @@ export function buildBrief(state, { now = Date.now(), timeZone = "America/New_Yo
       description: lines.join("\n"),
     });
   }
+  // Only prices from the last 12 hours count as "this morning" (not Friday's on a Sunday).
   const quotes = BRIEF_MARKETS.map((s) => state.marketQuotes?.find((q) => q.symbol === s)).filter(
-    Boolean
+    (q) => q && now - q.asOf < 12 * HOUR_MS
   );
   if (quotes.length) {
     embeds.push({

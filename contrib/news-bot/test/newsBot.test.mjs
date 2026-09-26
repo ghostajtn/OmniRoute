@@ -1239,10 +1239,10 @@ test("buildBrief sums up the night, the markets, today's calendar and the odds",
   assert.equal(news.title, "☀️ Morning brief · Friday, September 25");
   const lines = news.description.split("\n");
   assert.deepEqual(lines.slice(0, 4), [
-    "• [Breaking Stocks slide (again)](https://news.test/%5BBreaking%5D%20Stocks%20slide%20(again%29) · Test Feed",
+    "• [Breaking Stocks slide (again)](https://news.test/%5BBreaking%5D%20Stocks%20slide%20(again%29) · Test",
     "• [Fed signals rate cut in December](https://news.test/Fed%20signals%20rate%20cut%20in%20December) · Federal Reserve",
-    "• [Another top story](https://news.test/Another%20top%20story) · Test Feed",
-    "• [Quiet top story](https://news.test/Quiet%20top%20story) · Test Feed",
+    "• [Another top story](https://news.test/Another%20top%20story) · Test",
+    "• [Quiet top story](https://news.test/Quiet%20top%20story) · Test",
   ]);
   assert.ok(!news.description.includes("OPEC"), "yesterday's news is not overnight news");
   assert.match(
@@ -1268,6 +1268,11 @@ test("buildBrief sums up the night, the markets, today's calendar and the odds",
     ].join("\n")
   );
   assert.deepEqual(buildBrief(emptyState(), { now: morning }), [], "nothing to say yet");
+  const dayLater = buildBrief(briefState(), { now: NOW + 20 * HOUR });
+  assert.ok(
+    !dayLater.some((e) => e.title === "📊 Markets this morning"),
+    "stale prices are left out"
+  );
 });
 
 test("buildBrief keeps whole stories within Discord's embed limit", () => {
@@ -1285,9 +1290,7 @@ test("buildBrief keeps whole stories within Discord's embed limit", () => {
   const [news] = buildBrief(state, { now: NOW });
   assert.ok(news.description.length <= 3800);
   assert.ok(
-    news.description
-      .split("\n")
-      .every((line) => !line.startsWith("• ") || line.endsWith(" · Test Feed"))
+    news.description.split("\n").every((line) => !line.startsWith("• ") || line.endsWith(" · Test"))
   );
   assert.match(news.description, /Trump posted 2 times/, "the Trump line always fits");
 });
