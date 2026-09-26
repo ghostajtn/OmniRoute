@@ -4,8 +4,9 @@ name: News Bot
 # News Radar web app (contrib/news-bot/app) with a fresh feed.json to GitHub Pages.
 # Setup: add the repository secret DISCORD_WEBHOOK_URL (Settings → Secrets and
 # variables → Actions), and set Settings → Pages → Source to "GitHub Actions".
-# Without the secret every run is a no-op. Scheduled runs only fire from the
-# repository's default branch. See contrib/news-bot/README.md.
+# Without the secret nothing is posted to Discord, but the app is still updated.
+# Scheduled runs only fire from the repository's default branch. See
+# contrib/news-bot/README.md.
 
 on:
   schedule:
@@ -46,7 +47,15 @@ jobs:
           key: news-bot-state-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: news-bot-state-
 
-      - name: Post news to Discord
+      # A webhook saved as a variable would be ignored (and printed in these public logs).
+      - name: Check the webhook is saved as a secret
+        if: ${{ vars.DISCORD_WEBHOOK_URL != '' }}
+        run: >-
+          echo "::warning::DISCORD_WEBHOOK_URL is saved as a variable, which the bot ignores.
+          Delete the variable, then add the webhook under Settings → Secrets and variables →
+          Actions → Secrets → New repository secret."
+
+      - name: Post news to Discord and update the app feed
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           LLM_BASE_URL: ${{ secrets.NEWS_BOT_LLM_BASE_URL }}
