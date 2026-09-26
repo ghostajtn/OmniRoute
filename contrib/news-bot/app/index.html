@@ -355,6 +355,30 @@
       .search::placeholder {
         color: var(--muted);
       }
+      .searchrow {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 18px;
+      }
+      .searchrow .search {
+        margin-bottom: 0;
+      }
+      .toggle {
+        flex: none;
+        border: 1px solid var(--rule);
+        background: var(--surface);
+        border-radius: 12px;
+        padding: 0 12px;
+        font: 600 13px/1 var(--sans);
+        color: var(--muted);
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .toggle[aria-pressed="true"] {
+        border-color: var(--hot);
+        background: var(--hot-soft);
+        color: var(--hot);
+      }
 
       /* Headlines */
       .group + .group {
@@ -770,7 +794,7 @@
         const STALE_MS = 45 * 60 * 1000;
 
         const PAGE = 150;
-        const view = { feed: null, tab: "all", query: "", error: "", limit: PAGE };
+        const view = { feed: null, tab: "all", query: "", error: "", limit: PAGE, hotOnly: false };
         const $ = (id) => document.getElementById(id);
 
         const store = {
@@ -789,6 +813,7 @@
             }
           },
         };
+        view.hotOnly = store.get("nr-hot") === "1";
         const savedTab = store.get("nr-tab");
         if (savedTab && TABS.some(([id]) => id === savedTab)) view.tab = savedTab;
         const hashTab = location.hash.slice(1);
@@ -898,6 +923,7 @@
           const q = view.query.trim().toLowerCase();
           return all
             .filter((h) => view.tab === "all" || h.category === view.tab)
+            .filter((h) => !view.hotOnly || h.hot)
             .filter((h) => !q || `${h.title} ${h.who} ${h.source} ${h.text}`.toLowerCase().includes(q))
             .sort((a, b) => (b.published || b.at) - (a.published || a.at));
         }
@@ -976,18 +1002,38 @@
           const list = headlines();
           const parts = [];
           parts.push(
-            el("input", {
-              id: "search",
-              class: "search",
-              type: "search",
-              placeholder: "Search headlines, people, sources…",
-              value: view.query,
-              "aria-label": "Search headlines",
-              oninput: (e) => {
-                view.query = e.target.value;
-                renderFeedOnly();
-              },
-            })
+            el(
+              "div",
+              { class: "searchrow" },
+              el("input", {
+                id: "search",
+                class: "search",
+                type: "search",
+                placeholder: "Search headlines, people, sources…",
+                value: view.query,
+                "aria-label": "Search headlines",
+                oninput: (e) => {
+                  view.query = e.target.value;
+                  renderFeedOnly();
+                },
+              }),
+              el(
+                "button",
+                {
+                  class: "toggle",
+                  type: "button",
+                  "aria-pressed": String(view.hotOnly),
+                  title: "Only stories that could move markets",
+                  onclick: () => {
+                    view.hotOnly = !view.hotOnly;
+                    store.set("nr-hot", view.hotOnly ? "1" : "0");
+                    renderFeedOnly();
+                    document.querySelector(".toggle")?.focus({ preventScroll: true });
+                  },
+                },
+                "⚡ Market-moving"
+              )
+            )
           );
           if (view.error && !view.feed) {
             parts.push(el("div", { class: "empty" }, view.error));
@@ -998,7 +1044,11 @@
               el(
                 "div",
                 { class: "empty" },
-                view.query ? `No headlines match “${view.query}”.` : "No stories here yet. The bot checks for news every 15 minutes."
+                view.query
+                  ? `No headlines match “${view.query}”.`
+                  : view.hotOnly
+                    ? "No market-moving stories here right now."
+                    : "No stories here yet. The bot checks for news every 15 minutes."
               )
             );
           } else {
