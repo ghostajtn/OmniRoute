@@ -117,7 +117,9 @@ export async function resolveSources(config) {
     const custom = JSON.parse(await readFile(config.configFile, "utf8"));
     const replace = custom.replaceDefaults === true;
     feeds = [...(replace ? [] : feeds), ...(custom.feeds || [])];
-    people = [...(replace ? [] : people), ...(custom.people || [])];
+    people = [...(replace ? [] : people), ...(custom.people || [])].filter(
+      (person) => typeof person?.name === "string" && person.name.trim()
+    );
   }
   people = [...people, ...config.extraPeople.map((name) => ({ name }))];
   return buildFeedList({ feeds, people, trump: !config.disabled.has("trump") }).filter(
