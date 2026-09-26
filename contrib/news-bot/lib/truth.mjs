@@ -39,7 +39,7 @@ export function parsePostPage(html) {
  * Fill in the text-less photo and video posts from their archive pages, in place.
  * A page that can't be read leaves its post as it was.
  */
-export async function describeMediaPosts(items, httpGet, { limit = 20 } = {}) {
+export async function describeMediaPosts(items, httpGet, { limit = 20, concurrency = 4 } = {}) {
   const posts = items.filter((item) => {
     if (!isMediaOnlyPost(item)) return false;
     try {
@@ -48,14 +48,19 @@ export async function describeMediaPosts(items, httpGet, { limit = 20 } = {}) {
       return false;
     }
   });
-  for (const item of posts.slice(0, limit)) {
-    try {
-      const page = parsePostPage(await httpGet(item.link));
-      if (page.kind) item.mediaKind = page.kind;
-      if (page.text) item.summary = page.text;
-      if (page.image) item.image = page.image;
-    } catch {
-      // Keep the bare post.
+  const queue = posts.slice(0, limit);
+  // A few at a time, so a burst of videos on a slow archive doesn't hold up the news.
+  const worker = async () => {
+    for (let item = queue.shift(); item; item = queue.shift()) {
+      try {
+        const page = parsePostPage(await httpGet(item.link));
+        if (page.kind) item.mediaKind = page.kind;
+        if (page.text) item.summary = page.text;
+        if (page.image) item.image = page.image;
+      } catch {
+        // Keep the bare post.
+      }
     }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
 }

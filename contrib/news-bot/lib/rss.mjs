@@ -134,7 +134,9 @@ function findImage(block, html) {
     getAttr(block, "media:content", "medium") === "video"
       ? ""
       : getAttr(block, "media:content", "url");
-  const inline = decodeEntities(html).match(/<img\s[^>]*\bsrc\s*=\s*["']([^"']+)["']/i)?.[1] || "";
+  // The feed escapes the HTML, and the HTML escapes the attribute: decode both layers.
+  const src = decodeEntities(html).match(/<img\s[^>]*\bsrc\s*=\s*["']([^"']+)["']/i)?.[1];
+  const inline = src ? decodeEntities(src) : "";
   return (
     [getAttr(block, "media:thumbnail", "url"), media, inline].find((url) =>
       /^https:\/\/[^\s"<>]+$/.test(url)
