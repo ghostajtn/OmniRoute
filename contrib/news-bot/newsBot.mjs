@@ -199,22 +199,26 @@ export function selectNewItems(items, state, config, now = Date.now()) {
       const keys = itemKeys(item);
       if (keys.some((k) => inRun.has(k))) continue;
       keys.forEach((k) => inRun.add(k));
-      if (!NEVER_MERGED.has(category)) {
-        // Another outlet's take on a story already posted (or picked this run).
-        const tokens = titleTokens(item.title);
-        if (stories.some((story) => isSameStory(story, tokens))) {
-          markSeen(state, item, now);
-          continue;
-        }
-        stories.push(tokens);
-      }
       fresh.push(item);
     }
     fresh.sort((a, b) => (b.published || 0) - (a.published || 0));
 
+    // Newest first, until the section is full. Another outlet's take on a story that was
+    // posted or picked is dropped for good; stories that don't fit wait for the next run.
     const limit = firstRun ? config.firstRunPerCategory : config.maxPerCategory;
-    const chosen = fresh.slice(0, limit);
-    if (firstRun) fresh.slice(limit).forEach((item) => markSeen(state, item, now));
+    const chosen = [];
+    for (const item of fresh) {
+      const merge = !NEVER_MERGED.has(category);
+      const tokens = merge ? titleTokens(item.title) : null;
+      if (merge && stories.some((story) => isSameStory(story, tokens))) {
+        markSeen(state, item, now);
+      } else if (chosen.length < limit) {
+        chosen.push(item);
+        if (merge) stories.push(tokens);
+      } else if (firstRun) {
+        markSeen(state, item, now);
+      }
+    }
     // Oldest first so the newest story ends up at the bottom of the channel.
     if (chosen.length) selected[category] = chosen.reverse();
   }
