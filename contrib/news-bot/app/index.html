@@ -851,11 +851,20 @@
           lastVisit = newestStory();
           store.set("nr-last-visit", String(lastVisit));
         }
+        // What was on screen when the reader left; it stops being "New" when they come back.
+        let leftAt = 0;
         function rememberVisit() {
-          if (view.feed) store.set("nr-last-visit", String(newestStory()));
+          if (!view.feed) return;
+          leftAt = newestStory();
+          store.set("nr-last-visit", String(leftAt));
         }
         document.addEventListener("visibilitychange", () => {
-          if (document.visibilityState === "hidden") rememberVisit();
+          if (document.visibilityState === "hidden") {
+            rememberVisit();
+          } else if (leftAt > lastVisit) {
+            lastVisit = leftAt;
+            render();
+          }
         });
         window.addEventListener("pagehide", rememberVisit);
 
@@ -868,6 +877,7 @@
             .sort((a, b) => (b.published || b.at) - (a.published || a.at));
         }
 
+        let scrolledTo = null;
         function renderTabs() {
           const counts = {};
           for (const h of view.feed?.headlines || []) counts[h.category] = (counts[h.category] || 0) + 1;
@@ -897,9 +907,12 @@
               );
             })
           );
-          // Keep the selected tab in view when the tab bar scrolls sideways (phones).
+          // Bring the selected tab into view when it changes (the tab bar scrolls sideways on
+          // phones); a refresh leaves the bar where the reader put it.
           const current = nav.querySelector('.tab[aria-selected="true"]');
-          if (current) {
+          if (current && view.tab !== scrolledTo) {
+            // Until the feed arrives the counts are missing and the tabs are narrower.
+            if (view.feed) scrolledTo = view.tab;
             const bar = nav.getBoundingClientRect();
             const box = current.getBoundingClientRect();
             if (box.left < bar.left || box.right > bar.right) nav.scrollLeft += box.left - bar.left - 16;
