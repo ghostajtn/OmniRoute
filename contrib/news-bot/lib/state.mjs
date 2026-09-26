@@ -31,6 +31,7 @@ export function emptyState() {
     marketQuotes: [],
     priceAlerts: {},
     lastCloseDay: "",
+    lastBriefDay: "",
   };
 }
 
