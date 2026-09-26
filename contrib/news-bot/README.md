@@ -67,8 +67,9 @@ secret: without it, each run still updates the app and posts nothing.
 Notes:
 
 - Public repos get Actions minutes for free. A private repo uses about 2,900 minutes a month at the
-  15-minute schedule, so change the cron to `*/30 * * * *` to stay inside the free tier.
-- GitHub may start scheduled runs a few minutes late, and it pauses them after 60 days without repository activity.
+  15-minute schedule, so change the cron to `7,37 * * * *` (every 30 minutes) to stay inside the free tier.
+- GitHub may start scheduled runs late or skip some when it is busy, and it pauses them after 60 days
+  without repository activity.
 
 ## 2b. Or run it on any machine
 
