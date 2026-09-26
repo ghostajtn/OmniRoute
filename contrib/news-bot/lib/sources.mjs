@@ -14,6 +14,11 @@ export const CATEGORIES = {
   outlook: { label: "AI Outlook", emoji: "🧠", color: 0x95a5a6 },
 };
 
+// Shopping guides that Dow Jones feeds mix in ("Best High-Yield Savings Accounts for
+// September 2026", "Mortgage rates today"): advertising, not news.
+const SHOPPING =
+  /^(?:the )?best\b.{0,60}\b(?:accounts?|cards?|rates|deals|picks|loans?|brokers?|apps?)\b|\b(?:mortgage|cd|savings|refinance) rates today\b/i;
+
 // Ceremonial White House posts ("National Hunting and Fishing Day, 2026") that never move markets.
 const CEREMONIAL = /^presidential message\b|\b(?:day|week|month|anniversary),? \d{4}$/i;
 const fed = (feed) => `https://www.federalreserve.gov/feeds/${feed}.xml`;
@@ -63,6 +68,7 @@ export const NEWS_FEEDS = [
     category: "world",
     name: "WSJ World",
     url: "https://feeds.content.dowjones.io/public/rss/RSSWorldNews",
+    exclude: SHOPPING,
   },
   {
     id: "cnbc",
@@ -75,12 +81,14 @@ export const NEWS_FEEDS = [
     category: "markets",
     name: "MarketWatch",
     url: "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+    exclude: SHOPPING,
   },
   {
     id: "wsj-markets",
     category: "markets",
     name: "WSJ Markets",
     url: "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain",
+    exclude: SHOPPING,
   },
   {
     id: "google-business",

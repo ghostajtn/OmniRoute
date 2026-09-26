@@ -227,6 +227,24 @@ test("watchlist stories must name the person in the headline", () => {
   assert.equal(feedAccepts(plain, "Anything at all"), true, "news feeds take every story");
 });
 
+test("Dow Jones feeds skip shopping guides", () => {
+  const wsj = NEWS_FEEDS.find((f) => f.id === "wsj-world");
+  for (const ad of [
+    "Best High-Yield Savings Accounts for September 2026: Up to 4.50%",
+    "Best Credit Cards of 2026",
+    "Mortgage rates today, Sept. 26, 2026",
+  ]) {
+    assert.equal(feedAccepts(wsj, ad), false, ad);
+  }
+  assert.equal(feedAccepts(wsj, "U.S., China Agree to Trim Tariffs, Start AI Dialogue"), true);
+  assert.equal(feedAccepts(wsj, "Fed's best tool against inflation is rates, Warsh says"), true);
+  assert.ok(
+    NEWS_FEEDS.filter((f) => f.exclude)
+      .map((f) => f.id)
+      .includes("marketwatch")
+  );
+});
+
 test("resolveSources copes with hand-written config mistakes", async () => {
   const dir = await mkdtemp(join(tmpdir(), "news-bot-config-"));
   try {
