@@ -10,7 +10,8 @@ name: News Bot
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Off the busy :00/:15/:30/:45 minutes, when GitHub is most likely to drop scheduled runs.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       send_test_message:
