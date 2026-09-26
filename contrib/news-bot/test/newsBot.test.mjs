@@ -115,6 +115,41 @@ test("parseFeed reads Atom entries and prefers the alternate link", () => {
   assert.equal(entry.published, Date.parse("2026-09-25T14:00:00Z"));
 });
 
+test("parseFeed picks up story pictures, https only, never videos", () => {
+  const item = (inner) =>
+    `<rss><channel><item><title>T</title><link>https://n.test/a</link>${inner}</item></channel></rss>`;
+  const image = (inner) => parseFeed(item(inner))[0].image;
+  assert.equal(
+    image('<media:thumbnail width="240" url="https://img.test/bbc.png"/>'),
+    "https://img.test/bbc.png"
+  );
+  assert.equal(
+    image('<media:content url="https://img.test/mw" medium="image" type="image/jpeg"/>'),
+    "https://img.test/mw"
+  );
+  assert.equal(image('<media:content url="https://vid.test/clip.mp4" medium="video"/>'), "");
+  assert.equal(
+    image(
+      "<description>&lt;p&gt;&lt;img src=&quot;https://img.test/npr.jpg&quot; alt=&quot;&quot;&gt;Text&lt;/p&gt;</description>"
+    ),
+    "https://img.test/npr.jpg"
+  );
+  assert.equal(image('<media:thumbnail url="http://img.test/insecure.png"/>'), "");
+  assert.equal(
+    image("<content:encoded><![CDATA[<img src='https://img.test/npr2.jpg'>]]></content:encoded>"),
+    "https://img.test/npr2.jpg",
+    "NPR puts single-quoted images in content:encoded"
+  );
+  assert.equal(image(""), "");
+
+  const embed = newsEmbed({
+    ...parseFeed(item('<media:thumbnail url="https://img.test/bbc.png"/>'))[0],
+    category: "world",
+    feedName: "BBC World",
+  });
+  assert.deepEqual(embed.thumbnail, { url: "https://img.test/bbc.png" });
+});
+
 test("parseFeed returns [] for junk input", () => {
   assert.deepEqual(parseFeed(""), []);
   assert.deepEqual(parseFeed(null), []);

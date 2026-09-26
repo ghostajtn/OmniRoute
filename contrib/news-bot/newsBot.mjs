@@ -254,6 +254,7 @@ export function newsEmbed(item) {
     embed.title = `${hot ? "⚡ " : ""}${item.title}`;
     const summary = item.summary && !isGoogle && item.summary !== item.title ? item.summary : "";
     if (summary) embed.description = truncate(summary, 300);
+    if (item.image) embed.thumbnail = { url: item.image };
   }
   if (item.published) embed.timestamp = new Date(item.published).toISOString();
   return embed;
