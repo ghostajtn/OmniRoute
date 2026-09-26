@@ -126,7 +126,9 @@ On GitHub Actions, set `NEWS_BOT_EXTRA_PEOPLE`, `NEWS_BOT_DISABLE` and `NEWS_BOT
 Copy `sources.example.json`, edit it, and point `NEWS_BOT_CONFIG` at your copy. Each feed needs a `category`,
 which must be one of `breaking`, `world`, `markets`, `people` or `official`. Each person can have a
 [Google News search](https://support.google.com/news/publisher-center/answer/9606702) `query`. Without one, the
-bot searches for the person's name in quotes. Set `"replaceDefaults": true` to use only your own lists.
+bot searches for the person's name in quotes. A story is only posted if its headline names the person: by default
+their last name, or any of the names in `mentions` (such as `["Pelosi"]`). Set `"replaceDefaults": true` to use only
+your own lists.
 
 ### AI "what could happen next" (optional)
 

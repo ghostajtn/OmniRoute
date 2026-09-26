@@ -33,7 +33,15 @@ import { buildBrief, markdownLink } from "../lib/brief.mjs";
 import { buildFeed, compactScenario, writeFeed } from "../lib/feed.mjs";
 import { buildOutlookPrompt, generateOutlook, isOutlookConfigured } from "../lib/outlook.mjs";
 import { parseFeed, stripHtml } from "../lib/rss.mjs";
-import { NEWS_FEEDS, OFFICIAL_FEEDS, buildFeedList, isMarketMoving } from "../lib/sources.mjs";
+import {
+  NEWS_FEEDS,
+  OFFICIAL_FEEDS,
+  WATCHLIST,
+  buildFeedList,
+  feedAccepts,
+  isMarketMoving,
+  mentionPattern,
+} from "../lib/sources.mjs";
 import { detectBigMoves, formatMove, formatPrice, parseSpark, sparkUrl } from "../lib/prices.mjs";
 import { isSameStory, titleTokens } from "../lib/similar.mjs";
 import { describeMediaPosts, isMediaOnlyPost, parsePostPage } from "../lib/truth.mjs";
@@ -128,6 +136,41 @@ test("buildFeedList adds a Google News search per watchlist person", () => {
   const url = new URL(feeds[0].url);
   assert.equal(url.hostname, "news.google.com");
   assert.equal(url.searchParams.get("q"), '"Warren Buffett" when:1d');
+});
+
+test("mentionPattern matches whole names only, in any case, accents included", () => {
+  const fed = mentionPattern(["Fed", "Federal Reserve"]);
+  assert.equal(fed.test("Fed holds rates steady"), true);
+  assert.equal(fed.test("What the federal  reserve said"), true);
+  assert.equal(fed.test("FedEx raises prices"), false);
+  assert.equal(fed.test("Federal judge blocks order"), false);
+  assert.equal(mentionPattern(["Özil"]).test("özil signs"), true);
+  assert.equal(mentionPattern(["Özil"]).test("Özilx"), false);
+  assert.equal(
+    mentionPattern(["A.B. (C)"]).test("A.B. (C) wins"),
+    true,
+    "special characters are escaped"
+  );
+});
+
+test("watchlist stories must name the person in the headline", () => {
+  const [zuck] = buildFeedList({ feeds: [], people: [{ name: "Mark Zuckerberg" }], trump: false });
+  assert.equal(feedAccepts(zuck, "Zuckerberg says Meta will spend more on AI"), true);
+  assert.equal(feedAccepts(zuck, "Meta shares jump on AI spending"), false, "last name by default");
+  const buffett = buildFeedList({ feeds: [], people: WATCHLIST, trump: false }).find(
+    (f) => f.person === "Warren Buffett"
+  );
+  assert.equal(feedAccepts(buffett, "Berkshire buys more Occidental"), true);
+  assert.equal(
+    feedAccepts(buffett, "3 Undervalued Stocks Trading Up To 42% Below Fair Value"),
+    false
+  );
+  const [plain] = buildFeedList({
+    feeds: [{ name: "BBC", url: "https://x.test" }],
+    people: [],
+    trump: false,
+  });
+  assert.equal(feedAccepts(plain, "Anything at all"), true, "news feeds take every story");
 });
 
 test("isMarketMoving flags tariff/rate/earnings style headlines only", () => {
@@ -929,6 +972,45 @@ test("runCycle skips ceremonial White House posts and labels official statements
     [["⚡ Imposing Tariffs on Imported Trucks", "🏛️ White House · Presidential actions"]]
   );
   assert.ok(posted.some((p) => p.username.endsWith("Official Statements")));
+});
+
+test("runCycle only posts watchlist stories whose headline names the person", async () => {
+  const httpGet = async (url) => {
+    if (
+      url.includes("polymarket") ||
+      url.includes("faireconomy") ||
+      url.includes("finance.yahoo")
+    ) {
+      return "{}";
+    }
+    if (!url.includes(encodeURIComponent('"Tim Cook"'))) return rss([]);
+    return rss([
+      {
+        title: "Tim Cook says tariffs will raise iPhone prices",
+        link: "https://n.test/1",
+        at: NOW - 60_000,
+      },
+      { title: "Apple unveils a thinner iPhone", link: "https://n.test/2", at: NOW - 60_000 },
+    ]);
+  };
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "Tim Cook", NEWS_BOT_DISABLE: "brief" }, [
+    "--once",
+  ]);
+  const state = emptyState();
+  state.initialized = true;
+  await runCycle(config, state, { httpGet, discord, now: () => NOW });
+  assert.deepEqual(
+    posted.flatMap((p) => p.embeds).map((e) => [e.author.name, e.title]),
+    [["🗣️ Tim Cook", "⚡ Tim Cook says tariffs will raise iPhone prices"]]
+  );
 });
 
 test("outputMode: without a webhook the bot still updates the app's feed", () => {

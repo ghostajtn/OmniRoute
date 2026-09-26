@@ -9,7 +9,13 @@
     }
   ],
   "people": [
-    { "name": "Nancy Pelosi", "query": "\"Nancy Pelosi\" (stock OR trade OR shares)" },
-    { "name": "Mark Zuckerberg" }
+    {
+      "name": "Nancy Pelosi",
+      "query": "\"Nancy Pelosi\" (stock OR trade OR shares)",
+      "mentions": ["Pelosi"]
+    },
+    {
+      "name": "Mark Zuckerberg"
+    }
   ]
 }
