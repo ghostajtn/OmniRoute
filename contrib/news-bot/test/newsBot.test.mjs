@@ -33,6 +33,7 @@ import { buildFeed, compactScenario, writeFeed } from "../lib/feed.mjs";
 import { buildOutlookPrompt, generateOutlook, isOutlookConfigured } from "../lib/outlook.mjs";
 import { parseFeed, stripHtml } from "../lib/rss.mjs";
 import { NEWS_FEEDS, OFFICIAL_FEEDS, buildFeedList, isMarketMoving } from "../lib/sources.mjs";
+import { describeMediaPosts, isMediaOnlyPost, parsePostPage } from "../lib/truth.mjs";
 import {
   emptyState,
   isSeen,
@@ -161,6 +162,117 @@ test("resolveSources honours NEWS_BOT_EXTRA_PEOPLE and NEWS_BOT_DISABLE", async 
   assert.ok(feeds.some((f) => f.person === "Tim Cook"));
   assert.ok(!feeds.some((f) => f.category === "world"));
   assert.ok(!feeds.some((f) => f.category === "trump"));
+});
+
+// ── Truth Social photo and video posts ──────────────────────────────────────
+
+const archivePage = ({
+  kind = "video",
+  text,
+  image = "https://cdn.test/p.jpg",
+} = {}) => `<html><head>
+  <meta property="og:title" content="Donald J. Trump ${kind} post from September 26, 2026 - Trump&#x2019;s Truth">
+  <meta property="og:description" content="${text}">
+  <meta property="og:image" content="${image}">
+</head></html>`;
+
+const mediaPost = (id) => ({
+  title: "[No Title] - Post from September 26, 2026",
+  link: `https://www.trumpstruth.org/statuses/${id}`,
+  summary: "",
+  category: "trump",
+  feedName: "Truth Social",
+  published: NOW - 60_000,
+});
+
+test("parsePostPage reads the kind, caption or transcript, and preview of a post", () => {
+  assert.deepEqual(parsePostPage(archivePage({ text: "Get&#x20;this&#x20;lion." })), {
+    kind: "video",
+    text: "Get this lion.",
+    image: "https://cdn.test/p.jpg",
+  });
+  const photo = parsePostPage(
+    archivePage({
+      kind: "image",
+      text: "Donald J. Trump image published on September 26, 2026, preserved in the archive",
+      image: "javascript:alert(1)",
+    })
+  );
+  assert.deepEqual(
+    photo,
+    { kind: "photo", text: "", image: "" },
+    "generic text and bad urls dropped"
+  );
+  assert.deepEqual(parsePostPage("<html>nothing</html>"), { kind: "", text: "", image: "" });
+});
+
+test("describeMediaPosts fills in text-less posts from the archive and leaves the rest", async () => {
+  const fetched = [];
+  const httpGet = async (url) => {
+    fetched.push(url);
+    if (url.endsWith("/2")) throw new Error("HTTP 500");
+    return archivePage({ text: "On the orders of the president, Central Command struck" });
+  };
+  const withText = { ...mediaPost(3), title: "Big news!", summary: "Big news!" };
+  const elsewhere = { ...mediaPost(4), link: "https://evil.test/statuses/4" };
+  const items = [mediaPost(1), mediaPost(2), withText, elsewhere];
+  await describeMediaPosts(items, httpGet);
+
+  assert.deepEqual(fetched, [
+    "https://www.trumpstruth.org/statuses/1",
+    "https://www.trumpstruth.org/statuses/2",
+  ]);
+  assert.equal(items[0].mediaKind, "video");
+  assert.match(items[0].summary, /Central Command/);
+  assert.equal(items[0].image, "https://cdn.test/p.jpg");
+  assert.equal(isMediaOnlyPost(items[1]), true, "a page that failed leaves the post as it was");
+
+  const embed = newsEmbed(items[0]);
+  assert.equal(embed.title, "🎥 Trump posted a video");
+  assert.match(embed.description, /Central Command/);
+  assert.deepEqual(embed.image, { url: "https://cdn.test/p.jpg" });
+  assert.equal(newsEmbed(items[1]).description, undefined, "no placeholder text in Discord");
+});
+
+test("runCycle posts every photo and video post of the day, with its transcript", async () => {
+  const httpGet = async (url) => {
+    if (url.includes("polymarket") || url.includes("faireconomy")) return "[]";
+    if (url === "https://www.trumpstruth.org/feed") {
+      const items = [1, 2].map((id) => ({
+        title: "[No Title] - Post from September 26, 2026",
+        link: `https://www.trumpstruth.org/statuses/${id}`,
+        at: NOW - id * 60_000,
+      }));
+      return rss(items);
+    }
+    if (url.includes("/statuses/")) return archivePage({ text: `Transcript ${url.slice(-1)}` });
+    return rss([]);
+  };
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const state = emptyState();
+  state.initialized = true;
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "" }, ["--once"]);
+  const summary = await runCycle(config, state, { httpGet, discord, now: () => NOW });
+
+  assert.equal(summary.news, 2);
+  assert.deepEqual(
+    posted.flatMap((p) => p.embeds).map((e) => e.description),
+    ["Transcript 2", "Transcript 1"]
+  );
+  assert.deepEqual(
+    state.recentHeadlines.map((h) => [h.media, h.text]),
+    [
+      ["video", "Transcript 2"],
+      ["video", "Transcript 1"],
+    ]
+  );
 });
 
 // ── Prediction markets / calendar ────────────────────────────────────────────
@@ -371,6 +483,24 @@ test("itemKeys dedupes the same headline across feeds regardless of punctuation"
   const b = itemKeys({ title: "trump new tariffs", link: "https://b.test/2" });
   assert.equal(a[0], b[0]);
   assert.notEqual(a[1], b[1]);
+});
+
+test("Truth Social posts are told apart by link, not by their (often placeholder) title", () => {
+  // Photo and video posts all arrive as "[No Title] - Post from <date>".
+  const post = (id) => ({
+    title: "[No Title] - Post from September 26, 2026",
+    link: `https://www.trumpstruth.org/statuses/${id}`,
+    category: "trump",
+    published: NOW - 60_000,
+  });
+  const state = emptyState();
+  state.initialized = true;
+  const config = loadConfig({}, ["--once"]);
+  assert.equal(selectNewItems([post(1), post(2)], state, config, NOW).trump.length, 2);
+
+  markSeen(state, post(1), NOW);
+  assert.equal(isSeen(state, post(2)), false, "a later photo post the same day is still new");
+  assert.equal(isSeen(state, post(1)), true);
 });
 
 test("pruneState forgets stories older than a few days", () => {

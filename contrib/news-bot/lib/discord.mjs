@@ -41,6 +41,9 @@ export function clampEmbed(embed) {
   if (out.footer?.text)
     out.footer = { ...out.footer, text: truncate(out.footer.text, LIMITS.footer) };
   if (out.url && !/^https?:\/\//i.test(out.url)) delete out.url;
+  for (const key of ["image", "thumbnail"]) {
+    if (out[key] && !/^https:\/\//i.test(out[key].url || "")) delete out[key];
+  }
   if (Array.isArray(out.fields)) {
     out.fields = out.fields.slice(0, LIMITS.fields).map((f) => ({
       name: truncate(f.name || "​", LIMITS.fieldName),

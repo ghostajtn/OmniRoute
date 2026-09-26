@@ -769,7 +769,8 @@
           const href = safeUrl(h.link);
           const isTrump = h.category === "trump";
           const who = h.who && h.who !== cat.label ? h.who : "";
-          const title = isTrump ? (h.title.startsWith("RT @") ? `Trump re-posted ${h.title.slice(3)}` : "Trump posted on Truth Social") : h.title;
+          const posted = { video: "Trump posted a video", photo: "Trump posted a photo" }[h.media] || "Trump posted on Truth Social";
+          const title = isTrump ? (h.title.startsWith("RT @") ? `Trump re-posted ${h.title.slice(3)}` : posted) : h.title;
           const body = el(
             "div",
             {},
