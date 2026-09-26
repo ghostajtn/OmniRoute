@@ -28,6 +28,9 @@ export function emptyState() {
     recentOddsMoves: [],
     calendarEvents: [],
     lastOutlook: null,
+    marketQuotes: [],
+    priceAlerts: {},
+    lastCloseDay: "",
   };
 }
 

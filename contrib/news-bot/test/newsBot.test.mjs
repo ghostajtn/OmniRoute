@@ -33,6 +33,7 @@ import { buildFeed, compactScenario, writeFeed } from "../lib/feed.mjs";
 import { buildOutlookPrompt, generateOutlook, isOutlookConfigured } from "../lib/outlook.mjs";
 import { parseFeed, stripHtml } from "../lib/rss.mjs";
 import { NEWS_FEEDS, OFFICIAL_FEEDS, buildFeedList, isMarketMoving } from "../lib/sources.mjs";
+import { detectBigMoves, formatMove, formatPrice, parseSpark, sparkUrl } from "../lib/prices.mjs";
 import { describeMediaPosts, isMediaOnlyPost, parsePostPage } from "../lib/truth.mjs";
 import {
   emptyState,
@@ -164,6 +165,110 @@ test("resolveSources honours NEWS_BOT_EXTRA_PEOPLE and NEWS_BOT_DISABLE", async 
   assert.ok(!feeds.some((f) => f.category === "trump"));
 });
 
+// ── Market snapshot ─────────────────────────────────────────────────────────
+
+function sparkQuote(symbol, price, previousClose, end = NOW - 5 * 60_000) {
+  return {
+    symbol,
+    previousClose,
+    chartPreviousClose: previousClose,
+    fulldayPrice: price,
+    end: Math.floor(end / 1000) + 4 * 3600, // the session's end, not the last price
+    timestamp: [Math.floor(end / 1000) - 900, Math.floor(end / 1000)],
+    close: [previousClose, null, price],
+  };
+}
+const spark = (...quotes) => JSON.stringify(Object.fromEntries(quotes.map((q) => [q.symbol, q])));
+
+test("parseSpark turns Yahoo's spark response into quotes and formats them", () => {
+  assert.match(sparkUrl(), /symbols=%5EGSPC,%5EIXIC,.*BTC-USD&range=1d&interval=15m$/);
+  const quotes = parseSpark(
+    JSON.parse(
+      spark(
+        sparkQuote("^GSPC", 7743.41, 7704.13),
+        sparkQuote("^TNX", 5.184, 5.162),
+        sparkQuote("GC=F", 4321.2, 4298),
+        sparkQuote("CL=F", 92.41, 94.61),
+        { symbol: "BTC-USD", fulldayPrice: null }
+      )
+    )
+  );
+  assert.deepEqual(
+    quotes.map((q) => [q.name, formatPrice(q), formatMove(q)]),
+    [
+      ["S&P 500", "7,743", "+0.51%"],
+      ["10-yr yield", "5.18%", "+2 bp"],
+      ["Oil", "$92.41", "−2.33%"],
+      ["Gold", "$4,321", "+0.54%"],
+    ]
+  );
+  assert.deepEqual(quotes[0].points, [7704.13, 7743.41], "gaps dropped");
+  assert.equal(quotes[0].asOf, Math.floor((NOW - 5 * 60_000) / 1000) * 1000);
+});
+
+test("detectBigMoves alerts once per day and direction, again only if the move doubles", () => {
+  const quote = (price, end = NOW) =>
+    parseSpark(JSON.parse(spark(sparkQuote("^GSPC", price, 100, end))))[0];
+  let state = detectBigMoves([quote(97.9)], {}, { now: NOW });
+  assert.equal(state.moves.length, 1, "−2.1% crosses the 2% line");
+  state = detectBigMoves([quote(98.5)], state.alerted, { now: NOW });
+  state = detectBigMoves([quote(97.5)], state.alerted, { now: NOW });
+  assert.equal(state.moves.length, 0, "fading and coming back is not news");
+  state = detectBigMoves([quote(95.9)], state.alerted, { now: NOW });
+  assert.equal(state.moves.length, 1, "−4.1% doubles the move");
+  state = detectBigMoves([quote(102.5)], state.alerted, { now: NOW });
+  assert.equal(state.moves.length, 1, "the other direction is a new move");
+
+  const friday = NOW;
+  const saturday = NOW + 24 * HOUR;
+  assert.equal(detectBigMoves([quote(90, friday)], {}, { now: saturday }).moves.length, 0, "stale");
+  const nextDay = detectBigMoves([quote(97.5, saturday)], state.alerted, { now: saturday });
+  assert.equal(nextDay.moves.length, 1, "a new day starts over");
+  const later = detectBigMoves([], nextDay.alerted, { now: saturday + 5 * 24 * HOUR });
+  assert.deepEqual(later.alerted, {}, "old alerts are forgotten");
+});
+
+test("runCycle posts the closing bell once per trading day, after 4:15 pm in New York", async () => {
+  const friday = Date.parse("2026-09-25T20:30:00Z"); // 4:30 pm in New York
+  const closeTime = Date.parse("2026-09-25T20:00:00Z");
+  const quotes = spark(
+    sparkQuote("^GSPC", 7743.41, 7704.13, closeTime),
+    sparkQuote("ES=F", 7803.75, 7767, closeTime),
+    sparkQuote("BTC-USD", 84108, 83762, friday)
+  );
+  const httpGet = async (url) => {
+    if (url.includes("finance.yahoo")) return quotes;
+    if (url.includes("polymarket") || url.includes("faireconomy")) return "[]";
+    return rss([]);
+  };
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "" }, ["--once"]);
+  const state = emptyState();
+  state.initialized = true;
+
+  const first = await runCycle(config, state, { httpGet, discord, now: () => friday });
+  assert.equal(first.close, true);
+  const bell = posted.flatMap((p) => p.embeds).find((e) => e.title === "🔔 Closing bell");
+  assert.equal(bell.description, "🟢 **S&P 500** 7,743 (+0.51%)\n🟢 **Bitcoin** $84,108 (+0.41%)");
+  assert.equal(state.marketQuotes.length, 3, "the app still gets the futures");
+
+  const again = await runCycle(config, state, { httpGet, discord, now: () => friday + HOUR });
+  assert.equal(again.close, false);
+  const saturday = await runCycle(config, state, {
+    httpGet,
+    discord,
+    now: () => friday + 24 * HOUR,
+  });
+  assert.equal(saturday.close, false, "no trading on Saturday");
+});
+
 // ── Truth Social photo and video posts ──────────────────────────────────────
 
 const archivePage = ({
@@ -237,6 +342,7 @@ test("describeMediaPosts fills in text-less posts from the archive and leaves th
 test("runCycle posts every photo and video post of the day, with its transcript", async () => {
   const httpGet = async (url) => {
     if (url.includes("polymarket") || url.includes("faireconomy")) return "[]";
+    if (url.includes("finance.yahoo")) return "{}";
     if (url === "https://www.trumpstruth.org/feed") {
       const items = [1, 2].map((id) => ({
         title: "[No Title] - Post from September 26, 2026",
@@ -655,6 +761,9 @@ test("runCycle posts news, odds and calendar once, then nothing new on the next 
   const httpGet = async (url) => {
     if (url.includes("polymarket")) return JSON.stringify([polymarketEvent()]);
     if (url.includes("faireconomy")) return calendar;
+    if (url.includes("finance.yahoo")) {
+      return spark(sparkQuote("^GSPC", 7500, 7700), sparkQuote("^TNX", 5.1, 5.3));
+    }
     if (url.includes("trumpstruth")) return rss([]);
     return feedXml;
   };
@@ -684,6 +793,13 @@ test("runCycle posts news, odds and calendar once, then nothing new on the next 
     !posted.some((p) => p.embeds.some((e) => e.description?.includes("Pending Home Sales"))),
     "Discord only gets high-impact events"
   );
+  assert.equal(first.priceAlerts, 2);
+  const move = posted.flatMap((p) => p.embeds).find((e) => e.title === "📊 Big market move");
+  assert.equal(
+    move.description,
+    "🔴 **S&P 500** 7,500 (−2.60%)\n🔴 **10-yr yield** 5.10% (−20 bp)"
+  );
+  assert.equal(first.close, false, "11:00 in New York is not the close");
 
   // What the web app's feed.json is built from.
   assert.equal(state.recentHeadlines.length, 1);
@@ -717,6 +833,7 @@ test("runCycle skips ceremonial White House posts and labels official statements
   const httpGet = async (url) => {
     if (url.includes("polymarket")) return "[]";
     if (url.includes("faireconomy")) return "[]";
+    if (url.includes("finance.yahoo")) return "{}";
     if (!url.includes("presidential-actions")) return rss([]);
     return rss([
       { title: "National Farm Safety Week, 2026", link: "https://wh.test/p", at: NOW - 60_000 },
@@ -764,6 +881,7 @@ test("app-only mode fills the app's feed and never calls Discord", async () => {
   const httpGet = async (url) => {
     if (url.includes("polymarket")) return JSON.stringify([polymarketEvent()]);
     if (url.includes("faireconomy")) return "[]";
+    if (url.includes("finance.yahoo")) return "{}";
     if (url.includes("trumpstruth")) return rss([]);
     return rss([
       { title: "Stocks plunge as yields jump", link: "https://news.test/a", at: NOW - 60_000 },

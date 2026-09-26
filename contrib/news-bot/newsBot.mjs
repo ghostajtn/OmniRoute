@@ -28,6 +28,7 @@ import {
   upcomingHighImpact,
 } from "./lib/markets.mjs";
 import { generateOutlook, isOutlookConfigured } from "./lib/outlook.mjs";
+import { detectBigMoves, fetchQuotes, quoteLine } from "./lib/prices.mjs";
 import { parseFeed } from "./lib/rss.mjs";
 import {
   CATEGORIES,
@@ -273,10 +274,15 @@ function localDayAndHour(now, timeZone) {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
+    minute: "2-digit",
     hourCycle: "h23",
   }).formatToParts(new Date(now));
   const get = (type) => parts.find((p) => p.type === type)?.value;
-  return { day: `${get("year")}-${get("month")}-${get("day")}`, hour: Number(get("hour")) };
+  return {
+    day: `${get("year")}-${get("month")}-${get("day")}`,
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+  };
 }
 
 async function postNews(selected, config, state, discord, now) {
@@ -373,6 +379,61 @@ async function postCalendar(config, state, deps, now) {
   return events.length;
 }
 
+const MARKET_TIME_ZONE = "America/New_York";
+
+/**
+ * Refresh the market snapshot, alert on big moves, and post a closing-bell summary once
+ * per trading day after 4:15 pm in New York.
+ */
+async function postPrices(config, state, deps, now) {
+  const quotes = await fetchQuotes(deps.httpGet);
+  if (!quotes.length) return { alerts: 0, close: false };
+  state.marketQuotes = quotes;
+  const username = `${config.username} • ${CATEGORIES.prices.label}`;
+  const footer = { text: "Day change · prices from Yahoo Finance, may be delayed" };
+
+  const { moves, alerted } = detectBigMoves(quotes, state.priceAlerts, { now });
+  state.priceAlerts = alerted;
+  if (moves.length) {
+    await deps.discord.sendEmbeds(
+      [
+        {
+          color: moves[0].change < 0 ? 0xe74c3c : 0x2ecc71,
+          title: "📊 Big market move",
+          description: moves.map(quoteLine).join("\n"),
+          footer,
+        },
+      ],
+      { username }
+    );
+  }
+
+  const market = localDayAndHour(now, MARKET_TIME_ZONE);
+  const sp500 = quotes.find((q) => q.symbol === "^GSPC");
+  const closed = market.hour * 60 + market.minute >= 16 * 60 + 15;
+  const tradedToday = sp500 && localDayAndHour(sp500.asOf, MARKET_TIME_ZONE).day === market.day;
+  let close = false;
+  if (closed && tradedToday && state.lastCloseDay !== market.day) {
+    await deps.discord.sendEmbeds(
+      [
+        {
+          color: sp500.change < 0 ? 0xe74c3c : 0x2ecc71,
+          title: "🔔 Closing bell",
+          description: quotes
+            .filter((q) => q.symbol !== "ES=F")
+            .map(quoteLine)
+            .join("\n"),
+          footer,
+        },
+      ],
+      { username }
+    );
+    state.lastCloseDay = market.day;
+    close = true;
+  }
+  return { alerts: moves.length, close };
+}
+
 async function postOutlook(config, state, deps, scenarios, now) {
   if (!isOutlookConfigured(config)) return false;
   if (now - state.lastOutlookAt < config.outlookEveryHours * HOUR_MS) return false;
@@ -399,7 +460,16 @@ async function postOutlook(config, state, deps, scenarios, now) {
 /** One full cycle: news → prediction markets → calendar → AI outlook. */
 export async function runCycle(config, state, deps) {
   const now = deps.now ? deps.now() : Date.now();
-  const summary = { news: 0, oddsMoves: 0, digest: false, calendar: 0, outlook: false, errors: [] };
+  const summary = {
+    news: 0,
+    oddsMoves: 0,
+    digest: false,
+    calendar: 0,
+    priceAlerts: 0,
+    close: false,
+    outlook: false,
+    errors: [],
+  };
 
   const feeds = await resolveSources(config);
   const items = await fetchAllFeeds(feeds, deps.httpGet);
@@ -419,6 +489,14 @@ export async function runCycle(config, state, deps) {
       },
     ],
     ["calendar", async () => (summary.calendar = await postCalendar(config, state, deps, now))],
+    [
+      "prices",
+      async () => {
+        const result = await postPrices(config, state, deps, now);
+        summary.priceAlerts = result.alerts;
+        summary.close = result.close;
+      },
+    ],
     [
       "outlook",
       async () => (summary.outlook = await postOutlook(config, state, deps, scenarios, now)),
@@ -528,7 +606,8 @@ async function main() {
       log(
         `Cycle done${mode === "app-only" ? " (app only, nothing posted)" : ""}: ` +
           `${s.news} stories, ${s.oddsMoves} odds alerts, digest=${s.digest}, ` +
-          `calendar=${s.calendar}, outlook=${s.outlook}${s.errors.length ? `, ${s.errors.length} errors` : ""}`
+          `calendar=${s.calendar}, market alerts=${s.priceAlerts}, close=${s.close}, ` +
+          `outlook=${s.outlook}${s.errors.length ? `, ${s.errors.length} errors` : ""}`
       );
     } catch (err) {
       log(`❌ Cycle failed: ${err.message}`);

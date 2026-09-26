@@ -233,6 +233,75 @@
         opacity: 0.7;
       }
 
+      /* Market strip */
+      .tickers {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        padding-top: 16px;
+        scrollbar-width: none;
+      }
+      .tickers::-webkit-scrollbar {
+        display: none;
+      }
+      .ticker {
+        flex: none;
+        display: grid;
+        grid-template-areas: "name name" "price spark" "chg spark";
+        column-gap: 10px;
+        align-items: center;
+        min-width: 118px;
+        padding: 8px 10px 9px;
+        border: 1px solid var(--rule);
+        border-radius: 12px;
+        background: var(--surface);
+      }
+      .ticker .name {
+        grid-area: name;
+        font: 600 11px/1.3 var(--sans);
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .ticker .price {
+        grid-area: price;
+        font: 600 14px/1.35 var(--mono);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .ticker .chg {
+        grid-area: chg;
+        font: 500 11px/1.3 var(--mono);
+        white-space: nowrap;
+      }
+      .ticker .up {
+        color: var(--up);
+      }
+      .ticker .down {
+        color: var(--down);
+      }
+      .ticker svg {
+        grid-area: spark;
+        width: 46px;
+        height: 22px;
+        overflow: visible;
+      }
+      @media (min-width: 960px) {
+        .tickers {
+          display: grid;
+          grid-template-columns: repeat(5, minmax(0, 1fr));
+          overflow: visible;
+        }
+        .ticker {
+          grid-template-columns: auto minmax(0, 1fr);
+          min-width: 0;
+        }
+        .ticker svg {
+          justify-self: end;
+          width: 100%;
+          max-width: 96px;
+        }
+      }
+
       /* Layout */
       main {
         display: grid;
@@ -594,6 +663,7 @@
     </header>
 
     <div class="wrap">
+      <div class="tickers" id="tickers" aria-label="Markets" hidden></div>
       <main id="main" class="split">
         <section id="feed" aria-label="Headlines"></section>
         <aside class="rail" id="rail" aria-label="What could happen"></aside>
@@ -601,7 +671,8 @@
       <footer>
         Headlines from Google News, BBC, NPR, Al Jazeera, CNBC, MarketWatch, Seeking Alpha, the
         Federal Reserve, the White House, the ECB and the Truth Social archive at trumpstruth.org.
-        Odds from Polymarket; calendar from Forex Factory.
+        Odds from Polymarket; calendar from Forex Factory; prices from Yahoo Finance, which may be
+        delayed.
         Updated every 15 minutes by the News Radar bot. Odds are market prices, not predictions you
         should trade on, and nothing here is financial advice.
       </footer>
@@ -927,6 +998,63 @@
           target.append(section);
         }
 
+        function tickerPrice(q) {
+          const p = Number(q.price);
+          if (q.kind === "yield") return `${p.toFixed(2)}%`;
+          if (q.kind === "dollars") return p >= 1000 ? `$${Math.round(p).toLocaleString("en-US")}` : `$${p.toFixed(2)}`;
+          if (q.kind === "index") return Math.round(p).toLocaleString("en-US");
+          return p.toFixed(2);
+        }
+
+        function tickerMove(q) {
+          const size = q.kind === "yield" ? Number(q.change) * 100 : Number(q.changePct);
+          const text = q.kind === "yield" ? `${Math.round(Math.abs(size))} bp` : `${Math.abs(size).toFixed(2)}%`;
+          return { dir: size > 0 ? "up" : size < 0 ? "down" : "", text: `${size > 0 ? "▲" : size < 0 ? "▼" : ""}${text}` };
+        }
+
+        function sparkline(values, dir) {
+          const points = (values || []).map(Number).filter(Number.isFinite);
+          if (points.length < 2) return null;
+          const NS = "http://www.w3.org/2000/svg";
+          const [w, h] = [46, 22];
+          const min = Math.min(...points);
+          const span = Math.max(...points) - min || 1;
+          const svg = document.createElementNS(NS, "svg");
+          svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+          svg.setAttribute("class", dir);
+          svg.setAttribute("aria-hidden", "true");
+          const line = document.createElementNS(NS, "polyline");
+          line.setAttribute("points", points.map((p, i) => `${((i / (points.length - 1)) * w).toFixed(1)},${(h - 2 - ((p - min) / span) * (h - 4)).toFixed(1)}`).join(" "));
+          line.setAttribute("fill", "none");
+          line.setAttribute("stroke", "currentColor");
+          line.setAttribute("stroke-width", "1.5");
+          line.setAttribute("stroke-linejoin", "round");
+          line.setAttribute("vector-effect", "non-scaling-stroke");
+          svg.append(line);
+          return svg;
+        }
+
+        function renderTickers() {
+          const box = $("tickers");
+          const quotes = (view.feed?.markets || []).filter((q) => Number.isFinite(Number(q.price)));
+          box.hidden = !quotes.length;
+          box.replaceChildren(
+            ...quotes.map((q) => {
+              const move = tickerMove(q);
+              // Prices older than an hour (a closed market) say which day they are from.
+              const stale = Date.now() - Number(q.asOf) > 60 * 60 * 1000;
+              return el(
+                "div",
+                { class: "ticker", title: `As of ${new Date(Number(q.asOf)).toLocaleString()}` },
+                el("span", { class: "name" }, stale ? `${q.name} · ${shortDay.format(Number(q.asOf))}` : q.name),
+                el("span", { class: "price" }, tickerPrice(q)),
+                el("span", { class: `chg ${move.dir}` }, move.text),
+                sparkline(q.points, move.dir)
+              );
+            })
+          );
+        }
+
         function renderStatus() {
           const status = $("status");
           const text = $("status-text");
@@ -948,6 +1076,7 @@
         function render() {
           renderTabs();
           renderStatus();
+          renderTickers();
           const main = $("main");
           const feed = $("feed");
           const rail = $("rail");

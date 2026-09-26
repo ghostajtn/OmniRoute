@@ -49,6 +49,7 @@ export function buildFeed(state, now = Date.now()) {
       (e) => e.time >= now - 2 * HOUR_MS && e.time < now + 7 * DAY_MS
     ),
     outlook: state.lastOutlook || null,
+    markets: state.marketQuotes || [],
   };
 }
 
