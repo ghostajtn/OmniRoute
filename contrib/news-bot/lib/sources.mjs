@@ -126,8 +126,8 @@ export const WATCHLIST = [
   { name: "Elon Musk", query: '"Elon Musk"', mentions: ["Musk"] },
   {
     name: "Warren Buffett",
-    query: '"Warren Buffett" OR "Berkshire Hathaway"',
-    mentions: ["Buffett", "Berkshire"],
+    query: '"Warren Buffett" OR "Berkshire Hathaway" OR "Greg Abel"',
+    mentions: ["Buffett", "Berkshire", "Greg Abel"],
   },
   {
     name: "Federal Reserve",
@@ -146,6 +146,16 @@ export const WATCHLIST = [
   { name: "Cathie Wood", query: '"Cathie Wood"', mentions: ["Cathie Wood", "ARK Invest"] },
   { name: "Larry Fink", query: '"Larry Fink"', mentions: ["Fink", "BlackRock"] },
   { name: "Jensen Huang", query: '"Jensen Huang"', mentions: ["Huang"] },
+  { name: "Stanley Druckenmiller", query: '"Druckenmiller"', mentions: ["Druckenmiller"] },
+  { name: "Carl Icahn", query: '"Carl Icahn"', mentions: ["Icahn"] },
+  { name: "David Tepper", query: '"David Tepper"', mentions: ["Tepper", "Appaloosa"] },
+  { name: "Jeffrey Gundlach", query: '"Jeffrey Gundlach"', mentions: ["Gundlach", "DoubleLine"] },
+  { name: "Ken Griffin", query: '"Ken Griffin"', mentions: ["Ken Griffin", "Citadel"] },
+  {
+    name: "Nancy Pelosi",
+    query: '"Nancy Pelosi" (stock OR shares OR trade OR options)',
+    mentions: ["Pelosi"],
+  },
 ];
 
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
