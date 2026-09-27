@@ -16,7 +16,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { buildBrief, buildWeekAhead } from "./lib/brief.mjs";
-import { DiscordWebhook, isValidWebhookUrl, redactWebhook, truncate } from "./lib/discord.mjs";
+import {
+  DiscordWebhook,
+  defuseLinks,
+  isValidWebhookUrl,
+  redactWebhook,
+  truncate,
+} from "./lib/discord.mjs";
 import {
   buildFeed,
   compactEvent,
@@ -285,12 +291,12 @@ export function newsEmbed(item) {
       : media[item.mediaKind] || "Trump posted on Truth Social";
     embed.title = `${hot ? "⚡ " : ""}${headline}`;
     const text = item.summary || (isMediaOnlyPost(item) ? "" : item.title);
-    if (text) embed.description = truncate(text, 1500);
+    if (text) embed.description = truncate(defuseLinks(text), 1500);
     if (item.image) embed.image = { url: item.image };
   } else {
     embed.title = `${hot ? "⚡ " : ""}${item.title}`;
     const summary = item.summary && !isGoogle && item.summary !== item.title ? item.summary : "";
-    if (summary) embed.description = truncate(summary, 300);
+    if (summary) embed.description = truncate(defuseLinks(summary), 300);
     if (item.image) embed.thumbnail = { url: item.image };
   }
   if (item.published) embed.timestamp = new Date(item.published).toISOString();
@@ -537,7 +543,7 @@ async function postOutlook(config, state, deps, scenarios, now) {
       {
         color: CATEGORIES.outlook.color,
         author: { name: "🧠 AI outlook — what could happen next" },
-        description: text,
+        description: defuseLinks(text),
         footer: {
           text: "AI-generated speculation from recent headlines and market odds · not financial advice",
         },
