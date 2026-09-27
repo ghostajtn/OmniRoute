@@ -46,6 +46,7 @@ import {
 } from "../lib/sources.mjs";
 import { detectBigMoves, formatMove, formatPrice, parseSpark, sparkUrl } from "../lib/prices.mjs";
 import { isSameStory, titleTokens } from "../lib/similar.mjs";
+import { widelyReported } from "../lib/coverage.mjs";
 import { describeMediaPosts, isMediaOnlyPost, parsePostPage } from "../lib/truth.mjs";
 import {
   emptyState,
@@ -1536,6 +1537,78 @@ test("runCycle posts the morning brief once a day, from 7:30 until the window cl
   const custom = loadConfig({ NEWS_BOT_BRIEF_AT: "6:00" }, []);
   assert.equal(custom.briefAt, "6:00");
   assert.equal(loadConfig({ NEWS_BOT_BRIEF_AT: "soon" }, []).briefAt, "07:30");
+});
+
+// ── Widely reported stories ──────────────────────────────────────────────────
+
+test("a story five outlets carry within hours is flagged once as widely reported", async () => {
+  const state = emptyState();
+  state.initialized = true;
+  const original = {
+    ...newsItem("Trump rejects Iran proposal to reopen Hormuz", "world", 60),
+    source: "Reuters",
+  };
+  rememberHeadline(state, original, NOW - HOUR);
+  const outlet = (source, title) => ({
+    ...newsItem(title, "breaking", 5),
+    source,
+    link: `https://${source}.test/x`,
+  });
+  const versions = [
+    outlet("CNBC", "Trump says he rejects Iran's proposal to reopen Hormuz"),
+    outlet("Reuters", "Trump rejects Iranian proposal to reopen Strait of Hormuz"),
+    outlet("WSJ", "Trump rejects Iran's plan to reopen the Strait of Hormuz"),
+    outlet("AP", "Trump rejects Iran proposal on Hormuz reopening"),
+  ];
+  const config = loadConfig({}, ["--once"]);
+  selectNewItems(versions, state, config, NOW);
+  assert.deepEqual(
+    state.coverage[original.link].sources,
+    ["Reuters", "CNBC", "WSJ", "AP"],
+    "one outlet counts once"
+  );
+  assert.deepEqual(widelyReported(state, NOW), [], "four is not yet widely reported");
+
+  selectNewItems(
+    [outlet("BBC", "Trump rejects Iran proposal to reopen Hormuz strait")],
+    state,
+    config,
+    NOW
+  );
+  assert.deepEqual(
+    widelyReported(state, NOW).map((e) => e.title),
+    [original.title]
+  );
+  assert.deepEqual(widelyReported(state, NOW + 7 * HOUR), [], "too late to be news");
+  assert.equal(buildFeed(state, NOW).headlines[0].outlets, 5, "the app shows how many carried it");
+
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const httpGet = async (url) =>
+    url.includes("polymarket") || url.includes("faireconomy") || url.includes("finance.yahoo")
+      ? "{}"
+      : rss([]);
+  const quiet = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "", NEWS_BOT_DISABLE: "brief,calendar" }, [
+    "--once",
+  ]);
+  const first = await runCycle(quiet, state, { httpGet, discord, now: () => NOW });
+  assert.equal(first.widelyReported, 1);
+  const alert = posted
+    .flatMap((p) => p.embeds)
+    .find((e) => e.author?.name === "🔥 Widely reported");
+  assert.equal(alert.description, "Carried by 5 outlets so far: Reuters, CNBC, WSJ, AP, BBC.");
+  assert.equal(alert.url, original.link);
+  const again = await runCycle(quiet, state, { httpGet, discord, now: () => NOW + 10 * 60_000 });
+  assert.equal(again.widelyReported, 0, "once per story");
+
+  pruneState(state, NOW + 25 * HOUR);
+  assert.deepEqual(state.coverage, {}, "forgotten after a day");
 });
 
 // ── Source health ────────────────────────────────────────────────────────────

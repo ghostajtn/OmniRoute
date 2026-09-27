@@ -44,6 +44,7 @@ import { generateOutlook, isOutlookConfigured } from "./lib/outlook.mjs";
 import { detectBigMoves, fetchQuotes, quoteLine } from "./lib/prices.mjs";
 import { parseFeed } from "./lib/rss.mjs";
 import { isSameStory, titleTokens } from "./lib/similar.mjs";
+import { noteCoverage, widelyReported } from "./lib/coverage.mjs";
 import {
   CATEGORIES,
   NEWS_FEEDS,
@@ -219,9 +220,15 @@ export function selectNewItems(items, state, config, now = Date.now()) {
   const inRun = new Set();
   const selected = {};
   const firstRun = !state.initialized;
+  const story = (h, source) => ({
+    tokens: titleTokens(h.title),
+    link: h.link,
+    title: h.title,
+    source,
+  });
   const stories = state.recentHeadlines
     .filter((h) => !NEVER_MERGED.has(h.category) && now - h.at < SAME_STORY_WINDOW_MS)
-    .map((h) => titleTokens(h.title));
+    .map((h) => story(h, h.source));
 
   const byCategory = new Map(CATEGORY_ORDER.map((c) => [c, []]));
   for (const item of items) {
@@ -249,11 +256,13 @@ export function selectNewItems(items, state, config, now = Date.now()) {
     for (const item of fresh) {
       const merge = !NEVER_MERGED.has(category);
       const tokens = merge ? titleTokens(item.title) : null;
-      if (merge && stories.some((story) => isSameStory(story, tokens))) {
+      const original = merge && stories.find((s) => isSameStory(s.tokens, tokens));
+      if (original) {
         markSeen(state, item, now);
+        noteCoverage(state, original, item, now);
       } else if (chosen.length < limit) {
         chosen.push(item);
-        if (merge) stories.push(tokens);
+        if (merge) stories.push({ ...story(item, item.source || item.feedName) });
       } else if (firstRun) {
         markSeen(state, item, now);
       }
@@ -505,6 +514,33 @@ async function postPrices(config, state, deps, now) {
 // A brief that would go out more than this long after its time is skipped for the day.
 const BRIEF_WINDOW_MINUTES = 5 * 60;
 
+/** Flag stories that many outlets are carrying (see lib/coverage.mjs), once each. */
+async function postWidelyReported(config, state, deps, now) {
+  let posted = 0;
+  for (const entry of widelyReported(state, now)) {
+    const names = entry.sources.slice(0, 8).join(", ");
+    await deps.discord.sendEmbeds(
+      [
+        {
+          color: 0xe8590c,
+          author: { name: "🔥 Widely reported" },
+          title: entry.title,
+          url: entry.link,
+          description: defuseLinks(
+            `Carried by ${entry.sources.length} outlets so far: ${names}` +
+              `${entry.sources.length > 8 ? " and more" : ""}.`
+          ),
+          footer: { text: "When many outlets carry one story within hours, it's usually big news" },
+        },
+      ],
+      { username: `${config.username} • Widely Reported` }
+    );
+    entry.alerted = true;
+    posted++;
+  }
+  return posted;
+}
+
 /** Post the morning brief once a day, at NEWS_BOT_BRIEF_AT local time or soon after. */
 async function postBrief(config, state, deps, now) {
   const { day, hour, minute } = localDayAndHour(now, config.timeZone);
@@ -566,6 +602,7 @@ export async function runCycle(config, state, deps) {
     calendar: 0,
     priceAlerts: 0,
     close: false,
+    widelyReported: 0,
     brief: false,
     week: false,
     outlook: false,
@@ -585,6 +622,10 @@ export async function runCycle(config, state, deps) {
 
   let scenarios = [];
   const optional = [
+    [
+      "trending",
+      async () => (summary.widelyReported = await postWidelyReported(config, state, deps, now)),
+    ],
     [
       "predictions",
       async () => {
@@ -714,7 +755,8 @@ async function main() {
       log(
         `Cycle done${mode === "app-only" ? " (app only, nothing posted)" : ""}: ` +
           `${s.news} stories, ${s.oddsMoves} odds alerts, digest=${s.digest}, ` +
-          `calendar=${s.calendar}, market alerts=${s.priceAlerts}, close=${s.close}, brief=${s.brief}, week=${s.week}, ` +
+          `calendar=${s.calendar}, market alerts=${s.priceAlerts}, close=${s.close}, widely reported=${s.widelyReported}, ` +
+          `brief=${s.brief}, week=${s.week}, ` +
           `outlook=${s.outlook}${s.failingSources.length ? `, sources failed: ${s.failingSources.join(", ")}` : ""}` +
           `${s.errors.length ? `, ${s.errors.length} errors` : ""}`
       );
