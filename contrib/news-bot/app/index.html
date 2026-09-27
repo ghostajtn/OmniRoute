@@ -1153,7 +1153,8 @@
 
         function renderOdds(target, compact) {
           const scenarios = view.feed?.scenarios || [];
-          const moves = (view.feed?.oddsMoves || []).slice(0, 6);
+          // Only the last day's moves: an old swing is not news any more.
+          const moves = (view.feed?.oddsMoves || []).filter((m) => Date.now() - Number(m.at) < 24 * 60 * 60 * 1000).slice(0, 6);
           const title = el("h2", { class: "section-title" }, "What could happen", compact && scenarios.length ? el("a", { href: "#odds", onclick: (e) => { e.preventDefault(); view.tab = "odds"; store.set("nr-tab", "odds"); render(); window.scrollTo({ top: 0 }); } }, "All odds") : null);
           if (!scenarios.length) {
             target.append(el("section", {}, title, el("div", { class: "empty" }, "Odds appear after the bot's next run.")));
