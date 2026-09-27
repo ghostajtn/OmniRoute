@@ -18,6 +18,7 @@ import {
   DiscordWebhook,
   chunkEmbeds,
   clampEmbed,
+  defuseLinks,
   isValidWebhookUrl,
   redactWebhook,
 } from "../lib/discord.mjs";
@@ -753,6 +754,24 @@ test("isValidWebhookUrl accepts Discord webhooks only", () => {
 
 test("redactWebhook hides the token", () => {
   assert.equal(redactWebhook(WEBHOOK), "https://discord.com/api/webhooks/123456789/***");
+});
+
+test("text from feeds can't carry disguised Discord links", () => {
+  assert.equal(
+    defuseLinks("see [your bank](https://phish.test) now"),
+    "see [your bank]​(https://phish.test) now"
+  );
+  const embed = newsEmbed({
+    ...newsItem("Markets rally", "markets", 1),
+    summary: "Details [on Reuters](https://phish.test/login)",
+    link: "https://news.test/a",
+  });
+  assert.ok(!embed.description.includes("]("));
+  const post = newsEmbed({
+    ...newsItem("[No Title] - Post from September 26, 2026", "trump", 1),
+    summary: "Read [the truth](https://phish.test)",
+  });
+  assert.ok(!post.description.includes("]("));
 });
 
 test("clampEmbed truncates to Discord limits and drops non-http urls", () => {

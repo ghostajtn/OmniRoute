@@ -32,6 +32,15 @@ export function truncate(text, max) {
 }
 
 /** Clamp every field of an embed to Discord's limits. */
+/**
+ * Break Markdown masked links ("[text](https://…)") in text the bot didn't write (feed
+ * summaries, posts, AI output), so a story can't show one address and link to another.
+ * Bare URLs still turn into links, showing where they go.
+ */
+export function defuseLinks(text) {
+  return String(text ?? "").replace(/\]\(/g, "]\u200b(");
+}
+
 export function clampEmbed(embed) {
   const out = { ...embed };
   if (out.title) out.title = truncate(out.title, LIMITS.title);
