@@ -33,7 +33,7 @@
         --accent: #0d7566;
         --accent-ink: #ffffff;
         --accent-soft: #d6ece7;
-        --hot: #9a5e0b;
+        --hot: #945a0a;
         --hot-soft: #f7ead3;
         --up: #1d7f49;
         --down: #b93a2e;
@@ -230,7 +230,6 @@
       }
       .tab .count {
         font: 500 11px/1 var(--mono);
-        opacity: 0.7;
       }
 
       /* Market strip */
@@ -761,7 +760,7 @@
     </header>
 
     <div class="wrap">
-      <div class="tickers" id="tickers" aria-label="Markets" hidden></div>
+      <div class="tickers" id="tickers" role="region" aria-label="Markets" tabindex="0" hidden></div>
       <main id="main" class="split">
         <section id="feed" aria-label="Headlines"></section>
         <aside class="rail" id="rail" aria-label="What could happen"></aside>
