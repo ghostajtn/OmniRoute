@@ -786,6 +786,51 @@ test("clampEmbed truncates to Discord limits and drops non-http urls", () => {
   assert.equal(embed.url, undefined);
 });
 
+test("clampEmbed drops links longer than Discord accepts", () => {
+  const long = `https://news.google.com/rss/articles/${"x".repeat(2100)}`;
+  const out = clampEmbed({ title: "T", url: long, thumbnail: { url: long }, image: { url: long } });
+  assert.equal(out.url, undefined);
+  assert.equal(out.thumbnail, undefined);
+  assert.equal(out.image, undefined);
+  assert.equal(clampEmbed({ url: "https://ok.test/a" }).url, "https://ok.test/a");
+});
+
+test("one story Discord rejects can't block the rest of the batch", async () => {
+  const sent = [];
+  const logs = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.embeds.some((e) => e.title === "bad")) {
+        return fakeResponse(400, {
+          embeds: [String(body.embeds.findIndex((e) => e.title === "bad"))],
+        });
+      }
+      sent.push(...body.embeds.map((e) => e.title));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+    log: (m) => logs.push(m),
+  });
+  let handled = 0;
+  await discord.sendEmbeds([{ title: "a" }, { title: "bad" }, { title: "c" }], {
+    onSent: (n) => (handled += n),
+  });
+  assert.deepEqual(sent, ["a", "c"]);
+  assert.equal(handled, 3, "the rejected story counts as handled, so it isn't retried forever");
+  assert.ok(logs.some((l) => l.includes('skipped "bad"')));
+
+  const gone = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async () => fakeResponse(404),
+    sleep: async () => {},
+  });
+  await assert.rejects(
+    gone.sendEmbeds([{ title: "a" }]),
+    /404/,
+    "a deleted webhook still fails loudly"
+  );
+});
+
 test("chunkEmbeds respects 10 embeds and 6000 chars per message", () => {
   const small = Array.from({ length: 23 }, (_, i) => ({ title: `t${i}` }));
   assert.deepEqual(

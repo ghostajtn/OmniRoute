@@ -41,6 +41,8 @@ export function defuseLinks(text) {
   return String(text ?? "").replace(/\]\(/g, "]\u200b(");
 }
 
+const MAX_URL_LENGTH = 2048;
+
 export function clampEmbed(embed) {
   const out = { ...embed };
   if (out.title) out.title = truncate(out.title, LIMITS.title);
@@ -49,9 +51,13 @@ export function clampEmbed(embed) {
     out.author = { ...out.author, name: truncate(out.author.name, LIMITS.authorName) };
   if (out.footer?.text)
     out.footer = { ...out.footer, text: truncate(out.footer.text, LIMITS.footer) };
-  if (out.url && !/^https?:\/\//i.test(out.url)) delete out.url;
+  // Discord rejects the whole message over one link longer than it accepts (some Google
+  // News article links are), so such links are dropped.
+  if (out.url && (!/^https?:\/\//i.test(out.url) || out.url.length > MAX_URL_LENGTH))
+    delete out.url;
   for (const key of ["image", "thumbnail"]) {
-    if (out[key] && !/^https:\/\//i.test(out[key].url || "")) delete out[key];
+    const url = out[key]?.url || "";
+    if (out[key] && (!/^https:\/\//i.test(url) || url.length > MAX_URL_LENGTH)) delete out[key];
   }
   if (Array.isArray(out.fields)) {
     out.fields = out.fields.slice(0, LIMITS.fields).map((f) => ({
@@ -162,9 +168,11 @@ export class DiscordWebhook {
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        throw new Error(
+        const err = new Error(
           `Discord rejected the message (HTTP ${res.status}): ${truncate(text, 300)}`
         );
+        err.status = res.status;
+        throw err;
       }
 
       this.sent++;
@@ -187,8 +195,29 @@ export class DiscordWebhook {
   async sendEmbeds(embeds, { username, content, onSent } = {}) {
     const batches = chunkEmbeds(embeds);
     for (let i = 0; i < batches.length; i++) {
-      await this.send({ username, content: i === 0 ? content : undefined, embeds: batches[i] });
-      onSent?.(batches[i].length);
+      const first = i === 0 ? content : undefined;
+      try {
+        await this.send({ username, content: first, embeds: batches[i] });
+        onSent?.(batches[i].length);
+      } catch (err) {
+        // HTTP 400 means something in the message is malformed. Retrying the same batch
+        // would fail on every run and block every story behind it, so send the stories one
+        // by one and skip only the ones Discord still rejects.
+        if (err.status !== 400) throw err;
+        const alone = batches[i].length === 1;
+        for (const [j, embed] of batches[i].entries()) {
+          try {
+            if (alone) throw err;
+            await this.send({ username, content: j === 0 ? first : undefined, embeds: [embed] });
+          } catch (rejected) {
+            if (rejected.status !== 400) throw rejected;
+            this.log(
+              `Discord rejected a story; skipped "${truncate(embed.title || "", 80)}": ${rejected.message}`
+            );
+          }
+          onSent?.(1);
+        }
+      }
     }
     return batches.length;
   }
