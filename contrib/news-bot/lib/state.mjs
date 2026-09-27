@@ -5,8 +5,14 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-const SEEN_TTL_MS = 4 * 24 * 60 * 60 * 1000;
-const MAX_RECENT_HEADLINES = 200;
+import { pruneCoverage } from "./coverage.mjs";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SEEN_TTL_MS = 4 * DAY_MS;
+// The app keeps two days of headlines, capped per section so a busy section (the
+// watchlist can add 40 stories an hour) never pushes a quiet one (Trump, the Fed) out.
+const HEADLINE_TTL_MS = 2 * DAY_MS;
+const HEADLINES_PER_CATEGORY = 80;
 const MAX_RECENT_ODDS_MOVES = 30;
 
 export function emptyState() {
@@ -24,6 +30,14 @@ export function emptyState() {
     recentOddsMoves: [],
     calendarEvents: [],
     lastOutlook: null,
+    marketQuotes: [],
+    priceAlerts: {},
+    lastCloseDay: "",
+    lastBriefDay: "",
+    lastWeekAheadDay: "",
+    sourceHealth: {},
+    oddsHistory: {},
+    coverage: {},
   };
 }
 
@@ -61,7 +75,9 @@ export function normalizeTitle(title) {
 
 export function itemKeys(item) {
   const keys = [];
-  const title = normalizeTitle(item.title);
+  // Titles catch one story carried by several feeds. Truth Social posts are unique by link,
+  // and their titles are often a placeholder ("[No Title] - Post from <date>").
+  const title = item.category === "trump" ? "" : normalizeTitle(item.title);
   if (title) keys.push(`t:${hash(title)}`);
   const id = item.guid || item.link;
   if (id) keys.push(`l:${hash(id)}`);
@@ -80,12 +96,25 @@ export function pruneState(state, now = Date.now()) {
   for (const [key, ts] of Object.entries(state.seen)) {
     if (now - ts > SEEN_TTL_MS) delete state.seen[key];
   }
-  if (state.recentHeadlines.length > MAX_RECENT_HEADLINES) {
-    state.recentHeadlines = state.recentHeadlines.slice(-MAX_RECENT_HEADLINES);
-  }
+  state.recentHeadlines = trimHeadlines(state.recentHeadlines, now);
+  pruneCoverage(state, now);
   if (state.recentOddsMoves.length > MAX_RECENT_ODDS_MOVES) {
     state.recentOddsMoves = state.recentOddsMoves.slice(-MAX_RECENT_ODDS_MOVES);
   }
+}
+
+/** Newest `HEADLINES_PER_CATEGORY` per section from the last two days, oldest first. */
+function trimHeadlines(headlines, now) {
+  const perCategory = new Map();
+  const kept = [];
+  for (let i = headlines.length - 1; i >= 0; i--) {
+    const h = headlines[i];
+    const count = perCategory.get(h.category) || 0;
+    if (now - h.at > HEADLINE_TTL_MS || count >= HEADLINES_PER_CATEGORY) continue;
+    perCategory.set(h.category, count + 1);
+    kept.push(h);
+  }
+  return kept.reverse();
 }
 
 export function rememberHeadline(state, item, now = Date.now()) {
@@ -99,6 +128,7 @@ export function rememberHeadline(state, item, now = Date.now()) {
     hot: Boolean(item.hot),
     // Truth Social posts carry their text in the summary; other feeds only need the title.
     text: item.category === "trump" ? String(item.summary || "").slice(0, 600) : "",
+    ...(item.mediaKind ? { media: item.mediaKind } : {}),
     at: now,
   });
 }

@@ -1,14 +1,24 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { loadConfig, newsEmbed, resolveSources, runCycle, selectNewItems } from "../newsBot.mjs";
+import {
+  createDiscord,
+  loadConfig,
+  newsEmbed,
+  outputMode,
+  resolveSources,
+  runCycle,
+  selectNewItems,
+  updateSourceHealth,
+} from "../newsBot.mjs";
 import {
   DiscordWebhook,
   chunkEmbeds,
   clampEmbed,
+  defuseLinks,
   isValidWebhookUrl,
   redactWebhook,
 } from "../lib/discord.mjs";
@@ -21,10 +31,23 @@ import {
   upcomingHighImpact,
   yesProbability,
 } from "../lib/markets.mjs";
-import { buildFeed, compactScenario, writeFeed } from "../lib/feed.mjs";
+import { buildBrief, buildWeekAhead, markdownLink } from "../lib/brief.mjs";
+import { buildFeed, compactScenario, recordOddsHistory, writeFeed } from "../lib/feed.mjs";
 import { buildOutlookPrompt, generateOutlook, isOutlookConfigured } from "../lib/outlook.mjs";
 import { parseFeed, stripHtml } from "../lib/rss.mjs";
-import { buildFeedList, isMarketMoving } from "../lib/sources.mjs";
+import {
+  NEWS_FEEDS,
+  OFFICIAL_FEEDS,
+  WATCHLIST,
+  buildFeedList,
+  feedAccepts,
+  isMarketMoving,
+  mentionPattern,
+} from "../lib/sources.mjs";
+import { detectBigMoves, formatMove, formatPrice, parseSpark, sparkUrl } from "../lib/prices.mjs";
+import { isSameStory, titleTokens } from "../lib/similar.mjs";
+import { widelyReported } from "../lib/coverage.mjs";
+import { describeMediaPosts, isMediaOnlyPost, parsePostPage } from "../lib/truth.mjs";
 import {
   emptyState,
   isSeen,
@@ -95,6 +118,48 @@ test("parseFeed reads Atom entries and prefers the alternate link", () => {
   assert.equal(entry.published, Date.parse("2026-09-25T14:00:00Z"));
 });
 
+test("parseFeed picks up story pictures, https only, never videos", () => {
+  const item = (inner) =>
+    `<rss><channel><item><title>T</title><link>https://n.test/a</link>${inner}</item></channel></rss>`;
+  const image = (inner) => parseFeed(item(inner))[0].image;
+  assert.equal(
+    image('<media:thumbnail width="240" url="https://img.test/bbc.png"/>'),
+    "https://img.test/bbc.png"
+  );
+  assert.equal(
+    image('<media:content url="https://img.test/mw" medium="image" type="image/jpeg"/>'),
+    "https://img.test/mw"
+  );
+  assert.equal(image('<media:content url="https://vid.test/clip.mp4" medium="video"/>'), "");
+  assert.equal(
+    image(
+      "<description>&lt;p&gt;&lt;img src=&quot;https://img.test/npr.jpg&quot; alt=&quot;&quot;&gt;Text&lt;/p&gt;</description>"
+    ),
+    "https://img.test/npr.jpg"
+  );
+  assert.equal(image('<media:thumbnail url="http://img.test/insecure.png"/>'), "");
+  assert.equal(
+    image(
+      "<description>&lt;img src=&quot;https://img.test/a.jpg?w=300&amp;amp;h=200&quot;&gt;</description>"
+    ),
+    "https://img.test/a.jpg?w=300&h=200",
+    "both layers of escaping are undone"
+  );
+  assert.equal(
+    image("<content:encoded><![CDATA[<img src='https://img.test/npr2.jpg'>]]></content:encoded>"),
+    "https://img.test/npr2.jpg",
+    "NPR puts single-quoted images in content:encoded"
+  );
+  assert.equal(image(""), "");
+
+  const embed = newsEmbed({
+    ...parseFeed(item('<media:thumbnail url="https://img.test/bbc.png"/>'))[0],
+    category: "world",
+    feedName: "BBC World",
+  });
+  assert.deepEqual(embed.thumbnail, { url: "https://img.test/bbc.png" });
+});
+
 test("parseFeed returns [] for junk input", () => {
   assert.deepEqual(parseFeed(""), []);
   assert.deepEqual(parseFeed(null), []);
@@ -118,10 +183,139 @@ test("buildFeedList adds a Google News search per watchlist person", () => {
   assert.equal(url.searchParams.get("q"), '"Warren Buffett" when:1d');
 });
 
+test("mentionPattern matches whole names only, accents included", () => {
+  const fed = mentionPattern(["Fed", "Federal Reserve"]);
+  assert.equal(fed.test("Fed holds rates steady"), true);
+  assert.equal(fed.test("What the federal  reserve said"), true);
+  assert.equal(fed.test("FedEx raises prices"), false);
+  assert.equal(fed.test("Federal judge blocks order"), false);
+  assert.equal(
+    fed.test("Parents fed up with school lunch prices"),
+    false,
+    "short names keep their capitals"
+  );
+  assert.equal(mentionPattern(["Özil"]).test("Özil signs"), true);
+  assert.equal(mentionPattern(["Özil"]).test("özil signs"), false);
+  assert.equal(
+    mentionPattern(["Müller"]).test("müller signs"),
+    true,
+    "longer names match in any case"
+  );
+  assert.equal(mentionPattern(["Müller"]).test("Müllerx"), false);
+  assert.equal(
+    mentionPattern(["A.B. (C)"]).test("A.B. (C) wins"),
+    true,
+    "special characters are escaped"
+  );
+});
+
+test("watchlist stories must name the person in the headline", () => {
+  const [zuck] = buildFeedList({ feeds: [], people: [{ name: "Mark Zuckerberg" }], trump: false });
+  assert.equal(feedAccepts(zuck, "Zuckerberg says Meta will spend more on AI"), true);
+  assert.equal(feedAccepts(zuck, "Meta shares jump on AI spending"), false, "last name by default");
+  const buffett = buildFeedList({ feeds: [], people: WATCHLIST, trump: false }).find(
+    (f) => f.person === "Warren Buffett"
+  );
+  assert.equal(feedAccepts(buffett, "Berkshire buys more Occidental"), true);
+  assert.equal(
+    feedAccepts(buffett, "3 Undervalued Stocks Trading Up To 42% Below Fair Value"),
+    false
+  );
+  const [plain] = buildFeedList({
+    feeds: [{ name: "BBC", url: "https://x.test" }],
+    people: [],
+    trump: false,
+  });
+  assert.equal(feedAccepts(plain, "Anything at all"), true, "news feeds take every story");
+});
+
+test("Dow Jones feeds skip shopping guides", () => {
+  const wsj = NEWS_FEEDS.find((f) => f.id === "wsj-world");
+  for (const ad of [
+    "Best High-Yield Savings Accounts for September 2026: Up to 4.50%",
+    "Best Credit Cards of 2026",
+    "Mortgage rates today, Sept. 26, 2026",
+  ]) {
+    assert.equal(feedAccepts(wsj, ad), false, ad);
+  }
+  assert.equal(feedAccepts(wsj, "U.S., China Agree to Trim Tariffs, Start AI Dialogue"), true);
+  assert.equal(feedAccepts(wsj, "Fed's best tool against inflation is rates, Warsh says"), true);
+  assert.ok(
+    NEWS_FEEDS.filter((f) => f.exclude)
+      .map((f) => f.id)
+      .includes("marketwatch")
+  );
+});
+
+test("resolveSources copes with hand-written config mistakes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "news-bot-config-"));
+  try {
+    const file = join(dir, "sources.json");
+    await writeFile(
+      file,
+      JSON.stringify({
+        replaceDefaults: true,
+        feeds: [
+          {
+            id: "x",
+            category: "markets",
+            name: "X",
+            url: "https://x.test/rss",
+            exclude: "sponsored",
+          },
+        ],
+        people: [
+          { name: "Nancy Pelosi", mentions: "Pelosi" },
+          { query: "no name" },
+          { name: "  " },
+        ],
+      })
+    );
+    const feeds = await resolveSources(loadConfig({ NEWS_BOT_CONFIG: file }, []));
+    const pelosi = feeds.find((f) => f.person === "Nancy Pelosi");
+    assert.equal(
+      feedAccepts(pelosi, "Pelosi buys Nvidia calls"),
+      true,
+      "one name as a string works"
+    );
+    assert.equal(feedAccepts(pelosi, "Congress passes budget"), false);
+    assert.equal(feeds.filter((f) => f.category === "people").length, 1, "nameless people skipped");
+    assert.equal(
+      feedAccepts(
+        feeds.find((f) => f.id === "x"),
+        "Sponsored: buy now"
+      ),
+      true,
+      "a text exclude is ignored"
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("isMarketMoving flags tariff/rate/earnings style headlines only", () => {
   assert.equal(isMarketMoving("Trump announces new tariffs on EU cars"), true);
   assert.equal(isMarketMoving("Fed signals rate cut in December"), true);
   assert.equal(isMarketMoving("Local bakery wins award"), false);
+  assert.equal(isMarketMoving("Federal Reserve issues FOMC statement"), true);
+});
+
+test("official feeds come straight from the Fed, the White House and the ECB", () => {
+  assert.ok(OFFICIAL_FEEDS.every((f) => f.category === "official" && NEWS_FEEDS.includes(f)));
+  assert.deepEqual([...new Set(OFFICIAL_FEEDS.map((f) => new URL(f.url).hostname))].sort(), [
+    "www.ecb.europa.eu",
+    "www.federalreserve.gov",
+    "www.whitehouse.gov",
+  ]);
+  const actions = OFFICIAL_FEEDS.find((f) => f.id === "white-house-actions");
+  for (const ceremonial of [
+    "Gold Star Mother’s And Family’s Day, 2026",
+    "National Hispanic Heritage Month, 2026",
+    "Presidential Message on National Hunting and Fishing Day",
+  ]) {
+    assert.equal(actions.exclude.test(ceremonial), true, ceremonial);
+  }
+  assert.equal(actions.exclude.test("Adjusting Imports of Steel into the United States"), false);
 });
 
 test("resolveSources honours NEWS_BOT_EXTRA_PEOPLE and NEWS_BOT_DISABLE", async () => {
@@ -134,6 +328,289 @@ test("resolveSources honours NEWS_BOT_EXTRA_PEOPLE and NEWS_BOT_DISABLE", async 
   assert.ok(feeds.some((f) => f.person === "Tim Cook"));
   assert.ok(!feeds.some((f) => f.category === "world"));
   assert.ok(!feeds.some((f) => f.category === "trump"));
+});
+
+// ── Market snapshot ─────────────────────────────────────────────────────────
+
+function sparkQuote(symbol, price, previousClose, end = NOW - 5 * 60_000) {
+  return {
+    symbol,
+    previousClose,
+    chartPreviousClose: previousClose,
+    fulldayPrice: price,
+    end: Math.floor(end / 1000) + 4 * 3600, // the session's end, not the last price
+    timestamp: [Math.floor(end / 1000) - 900, Math.floor(end / 1000)],
+    close: [previousClose, null, price],
+  };
+}
+const spark = (...quotes) => JSON.stringify(Object.fromEntries(quotes.map((q) => [q.symbol, q])));
+
+test("parseSpark turns Yahoo's spark response into quotes and formats them", () => {
+  assert.match(sparkUrl(), /symbols=%5EGSPC,%5EIXIC,.*BTC-USD&range=1d&interval=15m$/);
+  const quotes = parseSpark(
+    JSON.parse(
+      spark(
+        sparkQuote("^GSPC", 7743.41, 7704.13),
+        sparkQuote("^TNX", 5.184, 5.162),
+        sparkQuote("GC=F", 4321.2, 4298),
+        sparkQuote("CL=F", 92.41, 94.61),
+        { symbol: "BTC-USD", fulldayPrice: null }
+      )
+    )
+  );
+  assert.deepEqual(
+    quotes.map((q) => [q.name, formatPrice(q), formatMove(q)]),
+    [
+      ["S&P 500", "7,743", "+0.51%"],
+      ["10-yr yield", "5.18%", "+2 bp"],
+      ["Oil", "$92.41", "−2.33%"],
+      ["Gold", "$4,321", "+0.54%"],
+    ]
+  );
+  assert.deepEqual(quotes[0].points, [7704.13, 7743.41], "gaps dropped");
+  assert.equal(quotes[0].asOf, Math.floor((NOW - 5 * 60_000) / 1000) * 1000);
+});
+
+test("detectBigMoves alerts once per day and direction, again only if the move doubles", () => {
+  const quote = (price, end = NOW) =>
+    parseSpark(JSON.parse(spark(sparkQuote("^GSPC", price, 100, end))))[0];
+  let state = detectBigMoves([quote(97.9)], {}, { now: NOW });
+  assert.equal(state.moves.length, 1, "−2.1% crosses the 2% line");
+  state = detectBigMoves([quote(98.5)], state.alerted, { now: NOW });
+  state = detectBigMoves([quote(97.5)], state.alerted, { now: NOW });
+  assert.equal(state.moves.length, 0, "fading and coming back is not news");
+  state = detectBigMoves([quote(95.9)], state.alerted, { now: NOW });
+  assert.equal(state.moves.length, 1, "−4.1% doubles the move");
+  state = detectBigMoves([quote(102.5)], state.alerted, { now: NOW });
+  assert.equal(state.moves.length, 1, "the other direction is a new move");
+
+  const friday = NOW;
+  const saturday = NOW + 24 * HOUR;
+  assert.equal(detectBigMoves([quote(90, friday)], {}, { now: saturday }).moves.length, 0, "stale");
+  const nextDay = detectBigMoves([quote(97.5, saturday)], state.alerted, { now: saturday });
+  assert.equal(nextDay.moves.length, 1, "a new day starts over");
+  const later = detectBigMoves([], nextDay.alerted, { now: saturday + 5 * 24 * HOUR });
+  assert.deepEqual(later.alerted, {}, "old alerts are forgotten");
+});
+
+test("an alert that fails to reach Discord is sent again on the next run", async () => {
+  let odds = '["0.62","0.38"]';
+  const httpGet = async (url) => {
+    if (url.includes("finance.yahoo")) return spark(sparkQuote("^GSPC", 7500, 7700));
+    if (url.includes("polymarket")) {
+      const event = polymarketEvent();
+      event.markets[0] = { ...event.markets[0], outcomePrices: odds };
+      return JSON.stringify([event]);
+    }
+    return url.includes("faireconomy") ? "[]" : rss([]);
+  };
+  let down = false;
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      if (down) throw new Error("socket hang up");
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "", NEWS_BOT_DISABLE: "brief,calendar" }, [
+    "--once",
+  ]);
+  const state = emptyState();
+  state.initialized = true;
+  state.lastPredictionsAt = NOW; // no digest in the way
+  const run = (minutes) =>
+    runCycle(config, state, { httpGet, discord, now: () => NOW + minutes * 60_000 });
+
+  down = true;
+  const first = await run(0);
+  assert.equal(first.errors.length, 1, "the price alert failed");
+  assert.deepEqual(state.priceAlerts, {}, "…and is not recorded as sent");
+
+  down = false;
+  const second = await run(10);
+  assert.equal(second.priceAlerts, 1);
+  assert.ok(posted.some((p) => p.embeds.some((e) => e.title === "📊 Big market move")));
+
+  odds = '["0.85","0.15"]'; // +23 points
+  down = true;
+  const third = await run(20);
+  assert.equal(third.errors.length, 1, "the odds alert failed");
+  down = false;
+  posted.length = 0;
+  const fourth = await run(25);
+  assert.equal(fourth.oddsMoves, 1, "and is sent on the next run");
+  assert.ok(posted.some((p) => p.embeds.some((e) => e.author?.name === "🔮 Odds shift")));
+});
+
+test("runCycle posts the closing bell once per trading day, after 4:15 pm in New York", async () => {
+  const friday = Date.parse("2026-09-25T20:30:00Z"); // 4:30 pm in New York
+  const closeTime = Date.parse("2026-09-25T20:00:00Z");
+  const quotes = spark(
+    sparkQuote("^GSPC", 7743.41, 7704.13, closeTime),
+    sparkQuote("ES=F", 7803.75, 7767, closeTime),
+    sparkQuote("BTC-USD", 84108, 83762, friday)
+  );
+  const httpGet = async (url) => {
+    if (url.includes("finance.yahoo")) return quotes;
+    if (url.includes("polymarket") || url.includes("faireconomy")) return "[]";
+    return rss([]);
+  };
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "" }, ["--once"]);
+  const state = emptyState();
+  state.initialized = true;
+
+  const first = await runCycle(config, state, { httpGet, discord, now: () => friday });
+  assert.equal(first.close, true);
+  const bell = posted.flatMap((p) => p.embeds).find((e) => e.title === "🔔 Closing bell");
+  assert.equal(bell.description, "🟢 **S&P 500** 7,743 (+0.51%)\n🟢 **Bitcoin** $84,108 (+0.41%)");
+  assert.equal(state.marketQuotes.length, 3, "the app still gets the futures");
+
+  const again = await runCycle(config, state, { httpGet, discord, now: () => friday + HOUR });
+  assert.equal(again.close, false);
+  const saturday = await runCycle(config, state, {
+    httpGet,
+    discord,
+    now: () => friday + 24 * HOUR,
+  });
+  assert.equal(saturday.close, false, "no trading on Saturday");
+});
+
+// ── Truth Social photo and video posts ──────────────────────────────────────
+
+const archivePage = ({
+  kind = "video",
+  text,
+  image = "https://cdn.test/p.jpg",
+} = {}) => `<html><head>
+  <meta property="og:title" content="Donald J. Trump ${kind} post from September 26, 2026 - Trump&#x2019;s Truth">
+  <meta property="og:description" content="${text}">
+  <meta property="og:image" content="${image}">
+</head></html>`;
+
+const mediaPost = (id) => ({
+  title: "[No Title] - Post from September 26, 2026",
+  link: `https://www.trumpstruth.org/statuses/${id}`,
+  summary: "",
+  category: "trump",
+  feedName: "Truth Social",
+  published: NOW - 60_000,
+});
+
+test("parsePostPage reads the kind, caption or transcript, and preview of a post", () => {
+  assert.deepEqual(parsePostPage(archivePage({ text: "Get&#x20;this&#x20;lion." })), {
+    kind: "video",
+    text: "Get this lion.",
+    image: "https://cdn.test/p.jpg",
+  });
+  const photo = parsePostPage(
+    archivePage({
+      kind: "image",
+      text: "Donald J. Trump image published on September 26, 2026, preserved in the archive",
+      image: "javascript:alert(1)",
+    })
+  );
+  assert.deepEqual(
+    photo,
+    { kind: "photo", text: "", image: "" },
+    "generic text and bad urls dropped"
+  );
+  assert.deepEqual(parsePostPage("<html>nothing</html>"), { kind: "", text: "", image: "" });
+});
+
+test("describeMediaPosts fills in text-less posts from the archive and leaves the rest", async () => {
+  const fetched = [];
+  const httpGet = async (url) => {
+    fetched.push(url);
+    if (url.endsWith("/2")) throw new Error("HTTP 500");
+    return archivePage({ text: "On the orders of the president, Central Command struck" });
+  };
+  const withText = { ...mediaPost(3), title: "Big news!", summary: "Big news!" };
+  const elsewhere = { ...mediaPost(4), link: "https://evil.test/statuses/4" };
+  const items = [mediaPost(1), mediaPost(2), withText, elsewhere];
+  await describeMediaPosts(items, httpGet);
+
+  assert.deepEqual(fetched, [
+    "https://www.trumpstruth.org/statuses/1",
+    "https://www.trumpstruth.org/statuses/2",
+  ]);
+  assert.equal(items[0].mediaKind, "video");
+  assert.match(items[0].summary, /Central Command/);
+  assert.equal(items[0].image, "https://cdn.test/p.jpg");
+  assert.equal(isMediaOnlyPost(items[1]), true, "a page that failed leaves the post as it was");
+
+  const embed = newsEmbed(items[0]);
+  assert.equal(embed.title, "🎥 Trump posted a video");
+  assert.match(embed.description, /Central Command/);
+  assert.deepEqual(embed.image, { url: "https://cdn.test/p.jpg" });
+  assert.equal(newsEmbed(items[1]).description, undefined, "no placeholder text in Discord");
+});
+
+test("describeMediaPosts reads several archive pages at once", async () => {
+  let inFlight = 0;
+  let most = 0;
+  const httpGet = async () => {
+    inFlight++;
+    most = Math.max(most, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    inFlight--;
+    return archivePage({ text: "Transcript" });
+  };
+  const items = Array.from({ length: 9 }, (_, i) => mediaPost(i + 1));
+  await describeMediaPosts(items, httpGet);
+  assert.equal(most, 4);
+  assert.ok(items.every((i) => i.summary === "Transcript"));
+});
+
+test("runCycle posts every photo and video post of the day, with its transcript", async () => {
+  const httpGet = async (url) => {
+    if (url.includes("polymarket") || url.includes("faireconomy")) return "[]";
+    if (url.includes("finance.yahoo")) return "{}";
+    if (url === "https://www.trumpstruth.org/feed") {
+      const items = [1, 2].map((id) => ({
+        title: "[No Title] - Post from September 26, 2026",
+        link: `https://www.trumpstruth.org/statuses/${id}`,
+        at: NOW - id * 60_000,
+      }));
+      return rss(items);
+    }
+    if (url.includes("/statuses/")) return archivePage({ text: `Transcript ${url.slice(-1)}` });
+    return rss([]);
+  };
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const state = emptyState();
+  state.initialized = true;
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "", NEWS_BOT_DISABLE: "brief" }, ["--once"]);
+  const summary = await runCycle(config, state, { httpGet, discord, now: () => NOW });
+
+  assert.equal(summary.news, 2);
+  assert.deepEqual(
+    posted.flatMap((p) => p.embeds).map((e) => e.description),
+    ["Transcript 2", "Transcript 1"]
+  );
+  assert.deepEqual(
+    state.recentHeadlines.map((h) => [h.media, h.text]),
+    [
+      ["video", "Transcript 2"],
+      ["video", "Transcript 1"],
+    ]
+  );
 });
 
 // ── Prediction markets / calendar ────────────────────────────────────────────
@@ -201,6 +678,22 @@ test("summarizeEvents keeps open, not-about-to-expire markets sorted by odds", (
   );
 });
 
+test("summarizeEvents leaves out short-term price bets", () => {
+  const titles = summarizeEvents(
+    [
+      polymarketEvent(),
+      polymarketEvent({ id: "2", title: "What will WTI Crude Oil (WTI) hit in September 2026?" }),
+      polymarketEvent({ id: "3", title: "What price will Bitcoin hit in 2026?" }),
+      polymarketEvent({ id: "4", title: "Will Trump hit China with new tariffs?" }),
+    ],
+    { now: NOW }
+  ).map((s) => s.title);
+  assert.deepEqual(titles.sort(), [
+    "Fed decision in October?",
+    "Will Trump hit China with new tariffs?",
+  ]);
+});
+
 test("detectOddsMoves alerts on big swings and resets the baseline after alerting", () => {
   const scenarios = summarizeEvents([polymarketEvent()], { now: NOW });
   const first = detectOddsMoves(scenarios, {});
@@ -264,6 +757,24 @@ test("redactWebhook hides the token", () => {
   assert.equal(redactWebhook(WEBHOOK), "https://discord.com/api/webhooks/123456789/***");
 });
 
+test("text from feeds can't carry disguised Discord links", () => {
+  assert.equal(
+    defuseLinks("see [your bank](https://phish.test) now"),
+    "see [your bank]​(https://phish.test) now"
+  );
+  const embed = newsEmbed({
+    ...newsItem("Markets rally", "markets", 1),
+    summary: "Details [on Reuters](https://phish.test/login)",
+    link: "https://news.test/a",
+  });
+  assert.ok(!embed.description.includes("]("));
+  const post = newsEmbed({
+    ...newsItem("[No Title] - Post from September 26, 2026", "trump", 1),
+    summary: "Read [the truth](https://phish.test)",
+  });
+  assert.ok(!post.description.includes("]("));
+});
+
 test("clampEmbed truncates to Discord limits and drops non-http urls", () => {
   const embed = clampEmbed({
     title: "x".repeat(400),
@@ -273,6 +784,51 @@ test("clampEmbed truncates to Discord limits and drops non-http urls", () => {
   assert.equal(embed.title.length, 256);
   assert.equal(embed.description.length, 4096);
   assert.equal(embed.url, undefined);
+});
+
+test("clampEmbed drops links longer than Discord accepts", () => {
+  const long = `https://news.google.com/rss/articles/${"x".repeat(2100)}`;
+  const out = clampEmbed({ title: "T", url: long, thumbnail: { url: long }, image: { url: long } });
+  assert.equal(out.url, undefined);
+  assert.equal(out.thumbnail, undefined);
+  assert.equal(out.image, undefined);
+  assert.equal(clampEmbed({ url: "https://ok.test/a" }).url, "https://ok.test/a");
+});
+
+test("one story Discord rejects can't block the rest of the batch", async () => {
+  const sent = [];
+  const logs = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.embeds.some((e) => e.title === "bad")) {
+        return fakeResponse(400, {
+          embeds: [String(body.embeds.findIndex((e) => e.title === "bad"))],
+        });
+      }
+      sent.push(...body.embeds.map((e) => e.title));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+    log: (m) => logs.push(m),
+  });
+  let handled = 0;
+  await discord.sendEmbeds([{ title: "a" }, { title: "bad" }, { title: "c" }], {
+    onSent: (n) => (handled += n),
+  });
+  assert.deepEqual(sent, ["a", "c"]);
+  assert.equal(handled, 3, "the rejected story counts as handled, so it isn't retried forever");
+  assert.ok(logs.some((l) => l.includes('skipped "bad"')));
+
+  const gone = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async () => fakeResponse(404),
+    sleep: async () => {},
+  });
+  await assert.rejects(
+    gone.sendEmbeds([{ title: "a" }]),
+    /404/,
+    "a deleted webhook still fails loudly"
+  );
 });
 
 test("chunkEmbeds respects 10 embeds and 6000 chars per message", () => {
@@ -346,6 +902,24 @@ test("itemKeys dedupes the same headline across feeds regardless of punctuation"
   assert.notEqual(a[1], b[1]);
 });
 
+test("Truth Social posts are told apart by link, not by their (often placeholder) title", () => {
+  // Photo and video posts all arrive as "[No Title] - Post from <date>".
+  const post = (id) => ({
+    title: "[No Title] - Post from September 26, 2026",
+    link: `https://www.trumpstruth.org/statuses/${id}`,
+    category: "trump",
+    published: NOW - 60_000,
+  });
+  const state = emptyState();
+  state.initialized = true;
+  const config = loadConfig({}, ["--once"]);
+  assert.equal(selectNewItems([post(1), post(2)], state, config, NOW).trump.length, 2);
+
+  markSeen(state, post(1), NOW);
+  assert.equal(isSeen(state, post(2)), false, "a later photo post the same day is still new");
+  assert.equal(isSeen(state, post(1)), true);
+});
+
 test("pruneState forgets stories older than a few days", () => {
   const state = emptyState();
   markSeen(state, { title: "old", link: "https://a.test/old" }, NOW - 10 * 24 * HOUR);
@@ -353,6 +927,22 @@ test("pruneState forgets stories older than a few days", () => {
   pruneState(state, NOW);
   assert.equal(isSeen(state, { title: "old", link: "https://a.test/old" }), false);
   assert.equal(isSeen(state, { title: "new", link: "https://a.test/new" }), true);
+});
+
+test("pruneState keeps two days of headlines, capped per section", () => {
+  const state = emptyState();
+  const add = (category, title, at) => rememberHeadline(state, newsItem(title, category, 0), at);
+  add("people", "stale", NOW - 3 * 24 * HOUR);
+  add("trump", "quiet section", NOW - 20 * HOUR);
+  for (let i = 0; i < 120; i++) add("people", `busy ${i}`, NOW - (120 - i) * 60_000);
+  pruneState(state, NOW);
+
+  const titles = state.recentHeadlines.map((h) => h.title);
+  assert.equal(titles.includes("stale"), false);
+  assert.equal(titles.includes("quiet section"), true, "a busy section can't push it out");
+  assert.equal(state.recentHeadlines.filter((h) => h.category === "people").length, 80);
+  assert.equal(titles.at(-1), "busy 119", "oldest first, newest kept");
+  assert.equal(titles.includes("busy 39"), false);
 });
 
 test("saveState/loadState round-trip and tolerate a missing file", async () => {
@@ -414,6 +1004,101 @@ test("selectNewItems: later runs skip seen, stale and duplicate stories; watchli
     selected.world.map((i) => i.title),
     ["fresh world story"]
   );
+});
+
+test("isSameStory matches one story reworded by different outlets, and nothing else", () => {
+  const same = (a, b) => isSameStory(titleTokens(a), titleTokens(b));
+  const hormuz = "Trump says he rejects Iran’s proposal to reopen Hormuz";
+  assert.equal(same(hormuz, "Trump rejects Iran proposal for deal to reopen Hormuz"), true);
+  assert.equal(
+    same(hormuz, "Trump says he rejected Iranian proposal to reopen Strait of Hormuz"),
+    true
+  );
+  assert.equal(
+    same(
+      "White House blocks CNN from traveling with Trump on Air Force One",
+      "Trump blocks CNN from traveling on Air Force One"
+    ),
+    true
+  );
+  assert.equal(
+    same(
+      "Trump predicts Cuba and US will make a deal",
+      "Cuba condemns US ‘collective punishment’ as Trump predicts deal"
+    ),
+    false,
+    "a new angle on a story is kept"
+  );
+  assert.equal(same("Fed cuts rates", "Fed cuts rates, stocks slide"), false, "too short to judge");
+  assert.equal(same("Stocks rise as Fed cuts rates", "Fed cuts rates by half a point"), false);
+});
+
+test("selectNewItems drops another outlet's take on a story already posted or picked", () => {
+  const state = emptyState();
+  state.initialized = true;
+  rememberHeadline(
+    state,
+    newsItem("Trump rejects Iran proposal for deal to reopen Hormuz", "world", 90),
+    NOW - 90 * 60_000
+  );
+  rememberHeadline(
+    state,
+    newsItem("Nvidia unveils new AI chip at conference", "markets", 60 * 13),
+    NOW - 13 * HOUR
+  );
+  const config = loadConfig({}, ["--once"]);
+  const items = [
+    newsItem("Trump says he rejects Iran’s proposal to reopen Hormuz", "breaking", 5),
+    newsItem("Musk says Tesla will cut prices in Europe", "people", 4),
+    newsItem("Tesla will cut prices in Europe, Musk says", "markets", 3),
+    newsItem("Nvidia unveils new AI chip at annual conference", "markets", 2),
+    {
+      ...newsItem("Trump rejects Iran proposal to reopen Hormuz", "official", 1),
+      feedName: "White House",
+    },
+  ];
+  const selected = selectNewItems(items, state, config, NOW);
+  assert.deepEqual(
+    Object.values(selected)
+      .flat()
+      .map((i) => [i.category, i.title]),
+    [
+      ["official", "Trump rejects Iran proposal to reopen Hormuz"],
+      ["people", "Musk says Tesla will cut prices in Europe"],
+      ["markets", "Nvidia unveils new AI chip at annual conference"],
+    ]
+  );
+  assert.equal(isSeen(state, items[0]), true, "a dropped duplicate is not checked again");
+  assert.equal(isSeen(state, items[2]), true);
+});
+
+test("a story held back for the next run doesn't suppress another outlet's version of it", () => {
+  const state = emptyState();
+  state.initialized = true;
+  const config = loadConfig({ NEWS_BOT_MAX_PER_CATEGORY: "1" }, ["--once"]);
+  const newest = newsItem("Musk says Tesla will build robots in Texas", "people", 1);
+  const heldBack = newsItem("Musk says SpaceX will launch Starship again next month", "people", 5);
+  const reworded = newsItem(
+    "SpaceX will launch Starship again next month, Musk says",
+    "breaking",
+    3
+  );
+  const first = selectNewItems([newest, heldBack, reworded], state, config, NOW);
+  assert.deepEqual(
+    Object.values(first)
+      .flat()
+      .map((i) => i.title),
+    [newest.title, reworded.title]
+  );
+  assert.equal(isSeen(state, heldBack), false, "it waits for the next run");
+  assert.equal(isSeen(state, reworded), false, "it is posted, not dropped");
+
+  // Once the reworded version is out, the held-back one is the duplicate.
+  rememberHeadline(state, reworded, NOW);
+  markSeen(state, newest, NOW);
+  markSeen(state, reworded, NOW);
+  assert.deepEqual(selectNewItems([heldBack], state, config, NOW + 60_000), {});
+  assert.equal(isSeen(state, heldBack), true);
 });
 
 test("newsEmbed flags market-moving headlines and formats Truth Social posts", () => {
@@ -482,6 +1167,9 @@ test("runCycle posts news, odds and calendar once, then nothing new on the next 
   const httpGet = async (url) => {
     if (url.includes("polymarket")) return JSON.stringify([polymarketEvent()]);
     if (url.includes("faireconomy")) return calendar;
+    if (url.includes("finance.yahoo")) {
+      return spark(sparkQuote("^GSPC", 7500, 7700), sparkQuote("^TNX", 5.1, 5.3));
+    }
     if (url.includes("trumpstruth")) return rss([]);
     return feedXml;
   };
@@ -511,6 +1199,13 @@ test("runCycle posts news, odds and calendar once, then nothing new on the next 
     !posted.some((p) => p.embeds.some((e) => e.description?.includes("Pending Home Sales"))),
     "Discord only gets high-impact events"
   );
+  assert.equal(first.priceAlerts, 2);
+  const move = posted.flatMap((p) => p.embeds).find((e) => e.title === "📊 Big market move");
+  assert.equal(
+    move.description,
+    "🔴 **S&P 500** 7,500 (−2.60%)\n🔴 **10-yr yield** 5.10% (−20 bp)"
+  );
+  assert.equal(first.close, false, "11:00 in New York is not the close");
 
   // What the web app's feed.json is built from.
   assert.equal(state.recentHeadlines.length, 1);
@@ -538,6 +1233,477 @@ test("runCycle posts news, odds and calendar once, then nothing new on the next 
   assert.equal(second.digest, false);
   assert.equal(second.calendar, 0);
   assert.equal(posted.length, 0);
+});
+
+test("runCycle skips ceremonial White House posts and labels official statements", async () => {
+  const httpGet = async (url) => {
+    if (url.includes("polymarket")) return "[]";
+    if (url.includes("faireconomy")) return "[]";
+    if (url.includes("finance.yahoo")) return "{}";
+    if (!url.includes("presidential-actions")) return rss([]);
+    return rss([
+      { title: "National Farm Safety Week, 2026", link: "https://wh.test/p", at: NOW - 60_000 },
+      {
+        title: "Imposing Tariffs on Imported Trucks",
+        link: "https://wh.test/eo",
+        at: NOW - 60_000,
+      },
+    ]);
+  };
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "", NEWS_BOT_DISABLE: "brief" }, ["--once"]);
+  const summary = await runCycle(config, emptyState(), { httpGet, discord, now: () => NOW });
+  assert.equal(summary.news, 1);
+  const embeds = posted.flatMap((p) => p.embeds);
+  assert.deepEqual(
+    embeds.map((e) => [e.title, e.author.name]),
+    [["⚡ Imposing Tariffs on Imported Trucks", "🏛️ White House · Presidential actions"]]
+  );
+  assert.ok(posted.some((p) => p.username.endsWith("Official Statements")));
+});
+
+test("runCycle only posts watchlist stories whose headline names the person", async () => {
+  const httpGet = async (url) => {
+    if (
+      url.includes("polymarket") ||
+      url.includes("faireconomy") ||
+      url.includes("finance.yahoo")
+    ) {
+      return "{}";
+    }
+    if (!url.includes(encodeURIComponent('"Tim Cook"'))) return rss([]);
+    return rss([
+      {
+        title: "Tim Cook says tariffs will raise iPhone prices",
+        link: "https://n.test/1",
+        at: NOW - 60_000,
+      },
+      { title: "Apple unveils a thinner iPhone", link: "https://n.test/2", at: NOW - 60_000 },
+    ]);
+  };
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "Tim Cook", NEWS_BOT_DISABLE: "brief" }, [
+    "--once",
+  ]);
+  const state = emptyState();
+  state.initialized = true;
+  await runCycle(config, state, { httpGet, discord, now: () => NOW });
+  assert.deepEqual(
+    posted.flatMap((p) => p.embeds).map((e) => [e.author.name, e.title]),
+    [["🗣️ Tim Cook", "⚡ Tim Cook says tariffs will raise iPhone prices"]]
+  );
+});
+
+test("outputMode: without a webhook the bot still updates the app's feed", () => {
+  const mode = (env, argv = ["--once"]) => outputMode(loadConfig(env, argv));
+  assert.equal(mode({ DISCORD_WEBHOOK_URL: WEBHOOK }), "discord");
+  assert.equal(mode({ DISCORD_WEBHOOK_URL: WEBHOOK, NEWS_BOT_FEED_FILE: "f.json" }), "discord");
+  assert.equal(mode({ NEWS_BOT_FEED_FILE: "f.json" }), "app-only");
+  assert.equal(mode({ DISCORD_WEBHOOK_URL: " " }), "none");
+  assert.equal(
+    mode({ NEWS_BOT_FEED_FILE: "f.json" }, ["--test"]),
+    "none",
+    "a test needs a webhook"
+  );
+  assert.equal(mode({ DISCORD_WEBHOOK_URL: WEBHOOK }, ["--once", "--dry-run"]), "dry-run");
+});
+
+test("app-only mode fills the app's feed and never calls Discord", async () => {
+  const httpGet = async (url) => {
+    if (url.includes("polymarket")) return JSON.stringify([polymarketEvent()]);
+    if (url.includes("faireconomy")) return "[]";
+    if (url.includes("finance.yahoo")) return "{}";
+    if (url.includes("trumpstruth")) return rss([]);
+    return rss([
+      { title: "Stocks plunge as yields jump", link: "https://news.test/a", at: NOW - 60_000 },
+    ]);
+  };
+  const config = loadConfig({ NEWS_BOT_FEED_FILE: "f.json", NEWS_BOT_EXTRA_PEOPLE: "" }, [
+    "--once",
+  ]);
+  let discordCalls = 0;
+  const discord = createDiscord(config, {
+    fetchImpl: async () => {
+      discordCalls++;
+      return fakeResponse(200);
+    },
+  });
+  const state = emptyState();
+
+  const summary = await runCycle(config, state, { httpGet, discord, now: () => NOW });
+  assert.equal(discordCalls, 0);
+  assert.equal(summary.news, 1);
+  assert.deepEqual(summary.errors, []);
+  const feed = buildFeed(state, NOW);
+  assert.deepEqual(
+    feed.headlines.map((h) => h.link),
+    ["https://news.test/a"]
+  );
+  assert.equal(feed.scenarios.length, 1);
+
+  // The story counts as seen, so it is not posted later once the webhook is added.
+  const again = await runCycle(config, state, { httpGet, discord, now: () => NOW + 60_000 });
+  assert.equal(again.news, 0);
+});
+
+// ── Morning brief ────────────────────────────────────────────────────────────
+
+function briefState() {
+  const state = emptyState();
+  const add = (title, category, hoursAgo, extra = {}) =>
+    rememberHeadline(state, newsItem(title, category, hoursAgo * 60, extra), NOW - hoursAgo * HOUR);
+  add("Oil jumps as OPEC cuts output", "markets", 20, { hot: true }); // before last night
+  add("Quiet top story", "breaking", 9);
+  add("Fed signals rate cut in December", "people", 8, { hot: true, person: "Federal Reserve" });
+  add("[Breaking] Stocks slide (again)", "markets", 3, { hot: true });
+  add("Another top story", "breaking", 2);
+  add("Trump posted on Truth Social", "trump", 6);
+  add("RT @someone", "trump", 1, {
+    summary: "We will win big on trade, bigger than anyone thought",
+  });
+  state.marketQuotes = parseSpark(
+    JSON.parse(spark(sparkQuote("^GSPC", 7743, 7704), sparkQuote("ES=F", 7804, 7767)))
+  );
+  const at = (iso) => Date.parse(iso);
+  state.calendarEvents = [
+    { title: "Core PCE", country: "USD", impact: "High", time: at("2026-09-25T10:00:00Z") },
+    {
+      title: "Pending Home Sales",
+      country: "USD",
+      impact: "Medium",
+      time: at("2026-09-25T16:00:00Z"),
+    },
+    { title: "Powell speaks", country: "USD", impact: "High", time: at("2026-09-25T17:00:00Z") },
+    {
+      title: "ISM Manufacturing",
+      country: "USD",
+      impact: "High",
+      time: at("2026-09-26T14:00:00Z"),
+    },
+  ];
+  const scenario = (id, markets) => ({
+    id,
+    title: `Question ${id}?`,
+    url: `https://pm.test/${id}`,
+    markets,
+  });
+  state.latestScenarios = [
+    scenario(1, [{ label: "Yes", probability: 0.17 }]),
+    scenario(2, [
+      { label: "No change", probability: 0.34 },
+      { label: "25 bps cut", probability: 0.65 },
+    ]),
+    scenario(3, [{ label: "Yes", probability: 0.5 }]),
+    scenario(4, [{ label: "Yes", probability: 0.9 }]),
+  ];
+  return state;
+}
+
+test("buildBrief sums up the night, the markets, today's calendar and the odds", () => {
+  const morning = Date.parse("2026-09-25T11:30:00Z"); // 7:30 in New York
+  const [news, markets, calendar, odds] = buildBrief(briefState(), { now: morning });
+  assert.equal(news.title, "☀️ Morning brief · Friday, September 25");
+  const lines = news.description.split("\n");
+  assert.deepEqual(lines.slice(0, 4), [
+    "• [Breaking Stocks slide (again)](https://news.test/%5BBreaking%5D%20Stocks%20slide%20(again%29) · Test",
+    "• [Fed signals rate cut in December](https://news.test/Fed%20signals%20rate%20cut%20in%20December) · Federal Reserve",
+    "• [Another top story](https://news.test/Another%20top%20story) · Test",
+    "• [Quiet top story](https://news.test/Quiet%20top%20story) · Test",
+  ]);
+  assert.ok(!news.description.includes("OPEC"), "yesterday's news is not overnight news");
+  assert.match(
+    news.description,
+    /Trump posted 2 times on Truth Social overnight\. \[Latest\]\(.+\): “We will win big/
+  );
+  assert.equal(
+    markets.description,
+    "🟢 **S&P futures** 7,804 (+0.48%)",
+    "futures, not yesterday's close"
+  );
+  assert.match(calendar.description, /Powell speaks/);
+  assert.ok(
+    !/Core PCE|Pending|ISM/.test(calendar.description),
+    "only today's high-impact events still ahead"
+  );
+  assert.equal(
+    odds.description,
+    [
+      "• [Question 1?](https://pm.test/1): **Yes 17%**",
+      "• [Question 2?](https://pm.test/2): **25 bps cut 65%**",
+      "• [Question 3?](https://pm.test/3): **Yes 50%**",
+    ].join("\n")
+  );
+  assert.deepEqual(buildBrief(emptyState(), { now: morning }), [], "nothing to say yet");
+  const dayLater = buildBrief(briefState(), { now: NOW + 20 * HOUR });
+  assert.ok(
+    !dayLater.some((e) => e.title === "📊 Markets this morning"),
+    "stale prices are left out"
+  );
+});
+
+test("buildBrief keeps whole stories within Discord's embed limit", () => {
+  const state = briefState();
+  for (let i = 0; i < 8; i++) {
+    rememberHeadline(
+      state,
+      {
+        ...newsItem(`Long link story ${i}`, "markets", 30, { hot: true }),
+        link: `https://news.test/${"x".repeat(700)}${i}`,
+      },
+      NOW - 30 * 60_000
+    );
+  }
+  const [news] = buildBrief(state, { now: NOW });
+  assert.ok(news.description.length <= 3800);
+  assert.ok(
+    news.description.split("\n").every((line) => !line.startsWith("• ") || line.endsWith(" · Test"))
+  );
+  assert.match(news.description, /Trump posted 2 times/, "the Trump line always fits");
+});
+
+function weekAheadState() {
+  const state = briefState();
+  const at = (iso) => Date.parse(iso);
+  state.calendarEvents = [
+    {
+      title: "FOMC Statement",
+      country: "USD",
+      impact: "High",
+      time: at("2026-09-30T18:00:00Z"),
+      forecast: "4.00%",
+    },
+    {
+      title: "ISM Manufacturing PMI",
+      country: "USD",
+      impact: "High",
+      time: at("2026-09-28T14:00:00Z"),
+    },
+    {
+      title: "JOLTS Job Openings",
+      country: "USD",
+      impact: "Medium",
+      time: at("2026-09-29T14:00:00Z"),
+    },
+    {
+      title: "Non-Farm Employment Change",
+      country: "USD",
+      impact: "High",
+      time: at("2026-10-02T12:30:00Z"),
+    },
+    { title: "Next week's CPI", country: "USD", impact: "High", time: at("2026-10-05T12:30:00Z") },
+  ];
+  return state;
+}
+
+test("buildWeekAhead lists next week's high-impact releases day by day, and the top odds", () => {
+  const sunday = Date.parse("2026-09-27T22:30:00Z"); // 6:30 pm in New York
+  const [calendar, odds] = buildWeekAhead(weekAheadState(), { now: sunday });
+  assert.equal(calendar.title, "🗓️ The week ahead: market-moving releases");
+  const lines = calendar.description.split("\n");
+  assert.equal(lines[0], "**Monday, Sep 28**");
+  assert.match(lines[1], /ISM Manufacturing PMI/);
+  assert.equal(lines[3], "**Wednesday, Sep 30**");
+  assert.match(lines[4], /FOMC Statement.*forecast \*\*4\.00%\*\*/);
+  assert.equal(lines[6], "**Friday, Oct 2**");
+  assert.ok(!/JOLTS|Next week's CPI/.test(calendar.description), "high impact, within 7 days");
+  assert.equal(odds.description.split("\n").length, 4, "the four open questions we know of");
+});
+
+test("runCycle posts the week ahead on Sunday evenings only, once", async () => {
+  const httpGet = async (url) =>
+    url.includes("polymarket") || url.includes("finance.yahoo") ? "{}" : rss([]);
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "", NEWS_BOT_DISABLE: "calendar,brief" }, [
+    "--once",
+  ]);
+  const state = weekAheadState();
+  state.initialized = true;
+  const run = async (iso) =>
+    (await runCycle(config, state, { httpGet, discord, now: () => Date.parse(iso) })).week;
+
+  assert.equal(await run("2026-09-26T22:30:00Z"), false, "Saturday");
+  assert.equal(await run("2026-09-27T21:00:00Z"), false, "Sunday 5 pm is too early");
+  assert.equal(await run("2026-09-27T22:30:00Z"), true);
+  assert.equal(posted.at(-1).username, "News Radar • Week Ahead");
+  assert.equal(await run("2026-09-27T23:30:00Z"), false, "once a week");
+});
+
+test("markdownLink keeps headlines from breaking Discord links", () => {
+  assert.equal(markdownLink("A [b] c", "https://x.test/a(b)"), "[A b c](https://x.test/a(b%29)");
+  assert.equal(markdownLink("Plain", "javascript:alert(1)"), "Plain");
+});
+
+test("runCycle posts the morning brief once a day, from 7:30 until the window closes", async () => {
+  const httpGet = async (url) =>
+    url.includes("polymarket") || url.includes("finance.yahoo") ? "{}" : rss([]);
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "", NEWS_BOT_DISABLE: "calendar" }, [
+    "--once",
+  ]);
+  const state = briefState();
+  state.initialized = true;
+  const run = async (iso) =>
+    (await runCycle(config, state, { httpGet, discord, now: () => Date.parse(iso) })).brief;
+
+  assert.equal(await run("2026-09-25T11:20:00Z"), false, "7:20 is too early");
+  assert.equal(await run("2026-09-25T12:00:00Z"), true);
+  assert.equal(posted.at(-1).username, "News Radar • Morning Brief");
+  assert.equal(await run("2026-09-25T12:10:00Z"), false, "once a day");
+  assert.equal(await run("2026-09-26T17:40:00Z"), false, "1:40 pm is too late for a morning brief");
+
+  const custom = loadConfig({ NEWS_BOT_BRIEF_AT: "6:00" }, []);
+  assert.equal(custom.briefAt, "6:00");
+  assert.equal(loadConfig({ NEWS_BOT_BRIEF_AT: "soon" }, []).briefAt, "07:30");
+});
+
+// ── Widely reported stories ──────────────────────────────────────────────────
+
+test("a story five outlets carry within hours is flagged once as widely reported", async () => {
+  const state = emptyState();
+  state.initialized = true;
+  const original = {
+    ...newsItem("Trump rejects Iran proposal to reopen Hormuz", "world", 60),
+    source: "Reuters",
+  };
+  rememberHeadline(state, original, NOW - HOUR);
+  const outlet = (source, title) => ({
+    ...newsItem(title, "breaking", 5),
+    source,
+    link: `https://${source}.test/x`,
+  });
+  const versions = [
+    outlet("CNBC", "Trump says he rejects Iran's proposal to reopen Hormuz"),
+    outlet("Reuters", "Trump rejects Iranian proposal to reopen Strait of Hormuz"),
+    outlet("WSJ", "Trump rejects Iran's plan to reopen the Strait of Hormuz"),
+    outlet("AP", "Trump rejects Iran proposal on Hormuz reopening"),
+  ];
+  const config = loadConfig({}, ["--once"]);
+  selectNewItems(versions, state, config, NOW);
+  assert.deepEqual(
+    state.coverage[original.link].sources,
+    ["Reuters", "CNBC", "WSJ", "AP"],
+    "one outlet counts once"
+  );
+  assert.deepEqual(widelyReported(state, NOW), [], "four is not yet widely reported");
+
+  selectNewItems(
+    [outlet("BBC", "Trump rejects Iran proposal to reopen Hormuz strait")],
+    state,
+    config,
+    NOW
+  );
+  assert.deepEqual(
+    widelyReported(state, NOW).map((e) => e.title),
+    [original.title]
+  );
+  assert.deepEqual(widelyReported(state, NOW + 7 * HOUR), [], "too late to be news");
+  assert.equal(buildFeed(state, NOW).headlines[0].outlets, 5, "the app shows how many carried it");
+
+  const posted = [];
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async (_url, init) => {
+      posted.push(JSON.parse(init.body));
+      return fakeResponse(200);
+    },
+    sleep: async () => {},
+  });
+  const httpGet = async (url) =>
+    url.includes("polymarket") || url.includes("faireconomy") || url.includes("finance.yahoo")
+      ? "{}"
+      : rss([]);
+  const quiet = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "", NEWS_BOT_DISABLE: "brief,calendar" }, [
+    "--once",
+  ]);
+  const first = await runCycle(quiet, state, { httpGet, discord, now: () => NOW });
+  assert.equal(first.widelyReported, 1);
+  const alert = posted
+    .flatMap((p) => p.embeds)
+    .find((e) => e.author?.name === "🔥 Widely reported");
+  assert.equal(alert.description, "Carried by 5 outlets so far: Reuters, CNBC, WSJ, AP, BBC.");
+  assert.equal(alert.url, original.link);
+  const again = await runCycle(quiet, state, { httpGet, discord, now: () => NOW + 10 * 60_000 });
+  assert.equal(again.widelyReported, 0, "once per story");
+
+  pruneState(state, NOW + 25 * HOUR);
+  assert.deepEqual(state.coverage, {}, "forgotten after a day");
+});
+
+// ── Source health ────────────────────────────────────────────────────────────
+
+test("updateSourceHealth reports a source once it has been failing for 3 hours", () => {
+  const feeds = [
+    { id: "npr", name: "NPR", url: "https://npr.test" },
+    { id: "bbc", name: "BBC World", url: "https://bbc.test" },
+  ];
+  const state = emptyState();
+  const failing = (...ids) => new Map(ids.map((id) => [id, "HTTP 503"]));
+
+  assert.deepEqual(updateSourceHealth(state, feeds, failing("npr"), NOW), []);
+  assert.deepEqual(updateSourceHealth(state, feeds, failing("npr"), NOW + 2 * HOUR), []);
+  const down = updateSourceHealth(state, feeds, failing("npr", "bbc"), NOW + 3 * HOUR);
+  assert.deepEqual(
+    down.map((h) => h.name),
+    ["NPR"],
+    "reported once, when it crosses 3 hours"
+  );
+  assert.deepEqual(updateSourceHealth(state, feeds, failing("npr", "bbc"), NOW + 4 * HOUR), []);
+  assert.deepEqual(
+    buildFeed(state, NOW + 4 * HOUR).downSources,
+    [{ name: "NPR", since: NOW }],
+    "the app lists sources that are down, not ones with a blip"
+  );
+
+  updateSourceHealth(state, feeds, failing("bbc"), NOW + 5 * HOUR);
+  assert.deepEqual(Object.keys(state.sourceHealth), ["bbc"], "a recovered source drops off");
+  assert.deepEqual(buildFeed(state, NOW + 5 * HOUR).downSources, []);
+});
+
+test("runCycle names the sources that failed", async () => {
+  const httpGet = async (url) => {
+    if (url.includes("npr.org")) throw new Error("HTTP 503");
+    return url.includes("polymarket") ||
+      url.includes("faireconomy") ||
+      url.includes("finance.yahoo")
+      ? "{}"
+      : rss([]);
+  };
+  const discord = new DiscordWebhook(WEBHOOK, {
+    fetchImpl: async () => fakeResponse(200),
+    sleep: async () => {},
+  });
+  const config = loadConfig({ NEWS_BOT_EXTRA_PEOPLE: "", NEWS_BOT_DISABLE: "brief" }, ["--once"]);
+  const state = emptyState();
+  const summary = await runCycle(config, state, { httpGet, discord, now: () => NOW });
+  assert.deepEqual(summary.failingSources, ["NPR"]);
+  assert.equal(state.sourceHealth.npr.error, "HTTP 503");
 });
 
 // ── Web app feed ─────────────────────────────────────────────────────────────
@@ -576,7 +1742,41 @@ test("compactScenario keeps the top four outcomes with rounded odds", () => {
     question: "Will the Fed cut 25 bps?",
     probability: 0.62,
     dayChange: 0.05,
+    trend: [],
   });
+});
+
+test("recordOddsHistory keeps an hourly reading per market for three days", () => {
+  const [scenario] = summarizeEvents([polymarketEvent()], { now: NOW });
+  const at = (minutes, probability) => ({
+    ...scenario,
+    markets: scenario.markets.map((m, i) => (i === 0 ? { ...m, probability } : m)),
+  });
+  let history = recordOddsHistory({}, [at(0, 0.6)], NOW);
+  history = recordOddsHistory(history, [at(20, 0.61)], NOW + 20 * 60_000);
+  history = recordOddsHistory(history, [at(56, 0.64)], NOW + 56 * 60_000);
+  assert.deepEqual(
+    history.a.map(([, p]) => p),
+    [0.6, 0.64],
+    "one reading an hour, give or take"
+  );
+  assert.deepEqual(Object.keys(history).sort(), ["a", "b"], "every market shown");
+
+  history = recordOddsHistory(history, [at(0, 0.7)], NOW + 4 * 24 * HOUR);
+  assert.deepEqual(
+    history.a.map(([, p]) => p),
+    [0.7],
+    "older than three days is dropped"
+  );
+  assert.deepEqual(recordOddsHistory(history, [], NOW), {}, "markets no longer shown are dropped");
+
+  const compact = compactScenario(scenario, {
+    a: [
+      [NOW, 0.6],
+      [NOW + HOUR, 0.62],
+    ],
+  });
+  assert.deepEqual(compact.markets[0].trend, [0.6, 0.62]);
 });
 
 test("buildFeed lists newest headlines first and only upcoming events", () => {

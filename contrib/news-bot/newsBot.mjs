@@ -7,6 +7,7 @@
 //   DISCORD_WEBHOOK_URL=... node contrib/news-bot/newsBot.mjs --once   # one cycle (cron / CI)
 //   node contrib/news-bot/newsBot.mjs --once --dry-run                 # print, don't post
 //   DISCORD_WEBHOOK_URL=... node contrib/news-bot/newsBot.mjs --test   # send a test message
+//   NEWS_BOT_FEED_FILE=feed.json node contrib/news-bot/newsBot.mjs --once  # no webhook: app feed only
 //
 // See contrib/news-bot/README.md for every option.
 
@@ -14,8 +15,21 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DiscordWebhook, isValidWebhookUrl, redactWebhook, truncate } from "./lib/discord.mjs";
-import { buildFeed, compactEvent, compactScenario, writeFeed } from "./lib/feed.mjs";
+import { buildBrief, buildWeekAhead } from "./lib/brief.mjs";
+import {
+  DiscordWebhook,
+  defuseLinks,
+  isValidWebhookUrl,
+  redactWebhook,
+  truncate,
+} from "./lib/discord.mjs";
+import {
+  buildFeed,
+  compactEvent,
+  compactScenario,
+  recordOddsHistory,
+  writeFeed,
+} from "./lib/feed.mjs";
 import {
   DEFAULT_MARKET_TAGS,
   detectOddsMoves,
@@ -27,12 +41,16 @@ import {
   upcomingHighImpact,
 } from "./lib/markets.mjs";
 import { generateOutlook, isOutlookConfigured } from "./lib/outlook.mjs";
+import { detectBigMoves, fetchQuotes, quoteLine } from "./lib/prices.mjs";
 import { parseFeed } from "./lib/rss.mjs";
+import { isSameStory, titleTokens } from "./lib/similar.mjs";
+import { noteCoverage, widelyReported } from "./lib/coverage.mjs";
 import {
   CATEGORIES,
   NEWS_FEEDS,
   WATCHLIST,
   buildFeedList,
+  feedAccepts,
   isMarketMoving,
 } from "./lib/sources.mjs";
 import {
@@ -44,12 +62,17 @@ import {
   rememberHeadline,
   saveState,
 } from "./lib/state.mjs";
+import { describeMediaPosts, isMediaOnlyPost } from "./lib/truth.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOUR_MS = 60 * 60 * 1000;
 const USER_AGENT = "Mozilla/5.0 (compatible; NewsRadarBot/1.0; +https://github.com/)";
 // Watchlist first so a story about a tracked person is labelled with their name.
-const CATEGORY_ORDER = ["trump", "people", "breaking", "markets", "world"];
+const CATEGORY_ORDER = ["trump", "official", "people", "breaking", "markets", "world"];
+// Truth Social posts and official statements are always posted, even when outlets carry
+// the same story; everything else is checked against the last 12 hours of posts.
+const NEVER_MERGED = new Set(["trump", "official"]);
+const SAME_STORY_WINDOW_MS = 12 * HOUR_MS;
 
 function log(message) {
   console.log(`[${new Date().toISOString()}] ${message}`);
@@ -91,6 +114,7 @@ export function loadConfig(env = process.env, argv = process.argv.slice(2)) {
     extraPeople: list(env.NEWS_BOT_EXTRA_PEOPLE) || [],
     disabled: new Set(list(env.NEWS_BOT_DISABLE) || []),
     timeZone: env.NEWS_BOT_TIMEZONE || "America/New_York",
+    briefAt: /^\d{1,2}:\d{2}$/.test(env.NEWS_BOT_BRIEF_AT || "") ? env.NEWS_BOT_BRIEF_AT : "07:30",
     llmBaseUrl: env.LLM_BASE_URL || "",
     llmApiKey: env.LLM_API_KEY || "",
     llmModel: env.LLM_MODEL || "",
@@ -106,7 +130,9 @@ export async function resolveSources(config) {
     const custom = JSON.parse(await readFile(config.configFile, "utf8"));
     const replace = custom.replaceDefaults === true;
     feeds = [...(replace ? [] : feeds), ...(custom.feeds || [])];
-    people = [...(replace ? [] : people), ...(custom.people || [])];
+    people = [...(replace ? [] : people), ...(custom.people || [])].filter(
+      (person) => typeof person?.name === "string" && person.name.trim()
+    );
   }
   people = [...people, ...config.extraPeople.map((name) => ({ name }))];
   return buildFeedList({ feeds, people, trump: !config.disabled.has("trump") }).filter(
@@ -139,10 +165,14 @@ async function mapLimit(items, limit, fn) {
   return results;
 }
 
+/** Fetch every feed; `failures` maps each feed that failed to its error message. */
 async function fetchAllFeeds(feeds, httpGet) {
+  const failures = new Map();
   const perFeed = await mapLimit(feeds, 4, async (feed) => {
     try {
-      const items = parseFeed(await httpGet(feed.url));
+      const items = parseFeed(await httpGet(feed.url)).filter((item) =>
+        feedAccepts(feed, item.title)
+      );
       return items.map((item) => ({
         ...item,
         category: feed.category,
@@ -150,11 +180,34 @@ async function fetchAllFeeds(feeds, httpGet) {
         person: feed.person,
       }));
     } catch (err) {
-      log(`⚠️  ${feed.name}: ${err.message}`);
+      failures.set(feed.id || feed.url, err.message);
       return [];
     }
   });
-  return perFeed.flat();
+  return { items: perFeed.flat(), failures };
+}
+
+// A source counts as down (logged, and listed in the app) after failing this long.
+const SOURCE_DOWN_AFTER_MS = 3 * HOUR_MS;
+
+/**
+ * Remember which sources are failing and since when; healthy ones drop off the list.
+ * Returns the sources that have just been down for SOURCE_DOWN_AFTER_MS.
+ */
+export function updateSourceHealth(state, feeds, failures, now) {
+  const before = state.sourceHealth || {};
+  const health = {};
+  const newlyDown = [];
+  for (const feed of feeds) {
+    const id = feed.id || feed.url;
+    if (!failures.has(id)) continue;
+    const since = before[id]?.since || now;
+    const down = now - since >= SOURCE_DOWN_AFTER_MS;
+    health[id] = { name: feed.name, since, error: failures.get(id), down };
+    if (down && !before[id]?.down) newlyDown.push(health[id]);
+  }
+  state.sourceHealth = health;
+  return newlyDown;
 }
 
 /**
@@ -167,6 +220,15 @@ export function selectNewItems(items, state, config, now = Date.now()) {
   const inRun = new Set();
   const selected = {};
   const firstRun = !state.initialized;
+  const story = (h, source) => ({
+    tokens: titleTokens(h.title),
+    link: h.link,
+    title: h.title,
+    source,
+  });
+  const stories = state.recentHeadlines
+    .filter((h) => !NEVER_MERGED.has(h.category) && now - h.at < SAME_STORY_WINDOW_MS)
+    .map((h) => story(h, h.source));
 
   const byCategory = new Map(CATEGORY_ORDER.map((c) => [c, []]));
   for (const item of items) {
@@ -187,9 +249,24 @@ export function selectNewItems(items, state, config, now = Date.now()) {
     }
     fresh.sort((a, b) => (b.published || 0) - (a.published || 0));
 
+    // Newest first, until the section is full. Another outlet's take on a story that was
+    // posted or picked is dropped for good; stories that don't fit wait for the next run.
     const limit = firstRun ? config.firstRunPerCategory : config.maxPerCategory;
-    const chosen = fresh.slice(0, limit);
-    if (firstRun) fresh.slice(limit).forEach((item) => markSeen(state, item, now));
+    const chosen = [];
+    for (const item of fresh) {
+      const merge = !NEVER_MERGED.has(category);
+      const tokens = merge ? titleTokens(item.title) : null;
+      const original = merge && stories.find((s) => isSameStory(s.tokens, tokens));
+      if (original) {
+        markSeen(state, item, now);
+        noteCoverage(state, original, item, now);
+      } else if (chosen.length < limit) {
+        chosen.push(item);
+        if (merge) stories.push({ ...story(item, item.source || item.feedName) });
+      } else if (firstRun) {
+        markSeen(state, item, now);
+      }
+    }
     // Oldest first so the newest story ends up at the bottom of the channel.
     if (chosen.length) selected[category] = chosen.reverse();
   }
@@ -217,12 +294,19 @@ export function newsEmbed(item) {
 
   if (isTruth) {
     const repost = item.title.match(/^RT @([\w.]+)/);
-    embed.title = `${hot ? "⚡ " : ""}${repost ? `Trump re-posted @${repost[1]}` : "Trump posted on Truth Social"}`;
-    embed.description = truncate(item.summary || item.title, 1500);
+    const media = { video: "🎥 Trump posted a video", photo: "📷 Trump posted a photo" };
+    const headline = repost
+      ? `Trump re-posted @${repost[1]}`
+      : media[item.mediaKind] || "Trump posted on Truth Social";
+    embed.title = `${hot ? "⚡ " : ""}${headline}`;
+    const text = item.summary || (isMediaOnlyPost(item) ? "" : item.title);
+    if (text) embed.description = truncate(defuseLinks(text), 1500);
+    if (item.image) embed.image = { url: item.image };
   } else {
     embed.title = `${hot ? "⚡ " : ""}${item.title}`;
     const summary = item.summary && !isGoogle && item.summary !== item.title ? item.summary : "";
-    if (summary) embed.description = truncate(summary, 300);
+    if (summary) embed.description = truncate(defuseLinks(summary), 300);
+    if (item.image) embed.thumbnail = { url: item.image };
   }
   if (item.published) embed.timestamp = new Date(item.published).toISOString();
   return embed;
@@ -263,10 +347,15 @@ function localDayAndHour(now, timeZone) {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
+    minute: "2-digit",
     hourCycle: "h23",
   }).formatToParts(new Date(now));
   const get = (type) => parts.find((p) => p.type === type)?.value;
-  return { day: `${get("year")}-${get("month")}-${get("day")}`, hour: Number(get("hour")) };
+  return {
+    day: `${get("year")}-${get("month")}-${get("day")}`,
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+  };
 }
 
 async function postNews(selected, config, state, discord, now) {
@@ -299,8 +388,16 @@ async function postPredictions(config, state, deps, now) {
   const { moves, baseline } = detectOddsMoves(tracked, state.oddsBaseline, {
     thresholdPts: config.oddsAlertPoints,
   });
+  const shown = tracked.slice(0, 12);
+  state.oddsHistory = recordOddsHistory(state.oddsHistory, shown, now);
+  state.latestScenarios = shown.map((s) => compactScenario(s, state.oddsHistory));
+  if (moves.length) {
+    await discord.sendEmbeds(moves.slice(0, 10).map(oddsMoveEmbed), {
+      username: `${config.username} • ${CATEGORIES.predictions.label}`,
+    });
+  }
+  // Only once the alerts are out: a failed send is retried on the next run.
   state.oddsBaseline = baseline;
-  state.latestScenarios = tracked.slice(0, 12).map(compactScenario);
   for (const move of moves) {
     state.recentOddsMoves.push({
       title: move.scenario.title,
@@ -310,11 +407,6 @@ async function postPredictions(config, state, deps, now) {
       to: move.to,
       deltaPts: Math.round(move.deltaPts * 10) / 10,
       at: now,
-    });
-  }
-  if (moves.length) {
-    await discord.sendEmbeds(moves.slice(0, 10).map(oddsMoveEmbed), {
-      username: `${config.username} • ${CATEGORIES.predictions.label}`,
     });
   }
 
@@ -363,6 +455,120 @@ async function postCalendar(config, state, deps, now) {
   return events.length;
 }
 
+const MARKET_TIME_ZONE = "America/New_York";
+
+/**
+ * Refresh the market snapshot, alert on big moves, and post a closing-bell summary once
+ * per trading day after 4:15 pm in New York.
+ */
+async function postPrices(config, state, deps, now) {
+  const quotes = await fetchQuotes(deps.httpGet);
+  if (!quotes.length) return { alerts: 0, close: false };
+  state.marketQuotes = quotes;
+  const username = `${config.username} • ${CATEGORIES.prices.label}`;
+  const footer = { text: "Day change · prices from Yahoo Finance, may be delayed" };
+
+  const { moves, alerted } = detectBigMoves(quotes, state.priceAlerts, { now });
+  if (moves.length) {
+    await deps.discord.sendEmbeds(
+      [
+        {
+          color: moves[0].change < 0 ? 0xe74c3c : 0x2ecc71,
+          title: "📊 Big market move",
+          description: moves.map(quoteLine).join("\n"),
+          footer,
+        },
+      ],
+      { username }
+    );
+  }
+  // Only once the alert is out: a failed send is retried on the next run.
+  state.priceAlerts = alerted;
+
+  const market = localDayAndHour(now, MARKET_TIME_ZONE);
+  const sp500 = quotes.find((q) => q.symbol === "^GSPC");
+  const closed = market.hour * 60 + market.minute >= 16 * 60 + 15;
+  const tradedToday = sp500 && localDayAndHour(sp500.asOf, MARKET_TIME_ZONE).day === market.day;
+  let close = false;
+  if (closed && tradedToday && state.lastCloseDay !== market.day) {
+    await deps.discord.sendEmbeds(
+      [
+        {
+          color: sp500.change < 0 ? 0xe74c3c : 0x2ecc71,
+          title: "🔔 Closing bell",
+          description: quotes
+            .filter((q) => q.symbol !== "ES=F")
+            .map(quoteLine)
+            .join("\n"),
+          footer,
+        },
+      ],
+      { username }
+    );
+    state.lastCloseDay = market.day;
+    close = true;
+  }
+  return { alerts: moves.length, close };
+}
+
+// A brief that would go out more than this long after its time is skipped for the day.
+const BRIEF_WINDOW_MINUTES = 5 * 60;
+
+/** Flag stories that many outlets are carrying (see lib/coverage.mjs), once each. */
+async function postWidelyReported(config, state, deps, now) {
+  let posted = 0;
+  for (const entry of widelyReported(state, now)) {
+    const names = entry.sources.slice(0, 8).join(", ");
+    await deps.discord.sendEmbeds(
+      [
+        {
+          color: 0xe8590c,
+          author: { name: "🔥 Widely reported" },
+          title: entry.title,
+          url: entry.link,
+          description: defuseLinks(
+            `Carried by ${entry.sources.length} outlets so far: ${names}` +
+              `${entry.sources.length > 8 ? " and more" : ""}.`
+          ),
+          footer: { text: "When many outlets carry one story within hours, it's usually big news" },
+        },
+      ],
+      { username: `${config.username} • Widely Reported` }
+    );
+    entry.alerted = true;
+    posted++;
+  }
+  return posted;
+}
+
+/** Post the morning brief once a day, at NEWS_BOT_BRIEF_AT local time or soon after. */
+async function postBrief(config, state, deps, now) {
+  const { day, hour, minute } = localDayAndHour(now, config.timeZone);
+  const [briefHour, briefMinute] = config.briefAt.split(":").map(Number);
+  const late = hour * 60 + minute - (briefHour * 60 + briefMinute);
+  if (state.lastBriefDay === day || late < 0 || late > BRIEF_WINDOW_MINUTES) return false;
+  const embeds = buildBrief(state, { now, timeZone: config.timeZone });
+  if (!embeds.length) return false;
+  await deps.discord.sendEmbeds(embeds, { username: `${config.username} • Morning Brief` });
+  state.lastBriefDay = day;
+  return true;
+}
+
+/** Post the week ahead once a week, on Sunday from 6 pm local time. */
+async function postWeekAhead(config, state, deps, now) {
+  const { day, hour } = localDayAndHour(now, config.timeZone);
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: config.timeZone,
+    weekday: "short",
+  }).format(new Date(now));
+  if (weekday !== "Sun" || hour < 18 || state.lastWeekAheadDay === day) return false;
+  const embeds = buildWeekAhead(state, { now, timeZone: config.timeZone });
+  if (!embeds.length) return false;
+  await deps.discord.sendEmbeds(embeds, { username: `${config.username} • Week Ahead` });
+  state.lastWeekAheadDay = day;
+  return true;
+}
+
 async function postOutlook(config, state, deps, scenarios, now) {
   if (!isOutlookConfigured(config)) return false;
   if (now - state.lastOutlookAt < config.outlookEveryHours * HOUR_MS) return false;
@@ -373,7 +579,7 @@ async function postOutlook(config, state, deps, scenarios, now) {
       {
         color: CATEGORIES.outlook.color,
         author: { name: "🧠 AI outlook — what could happen next" },
-        description: text,
+        description: defuseLinks(text),
         footer: {
           text: "AI-generated speculation from recent headlines and market odds · not financial advice",
         },
@@ -389,15 +595,37 @@ async function postOutlook(config, state, deps, scenarios, now) {
 /** One full cycle: news → prediction markets → calendar → AI outlook. */
 export async function runCycle(config, state, deps) {
   const now = deps.now ? deps.now() : Date.now();
-  const summary = { news: 0, oddsMoves: 0, digest: false, calendar: 0, outlook: false, errors: [] };
+  const summary = {
+    news: 0,
+    oddsMoves: 0,
+    digest: false,
+    calendar: 0,
+    priceAlerts: 0,
+    close: false,
+    widelyReported: 0,
+    brief: false,
+    week: false,
+    outlook: false,
+    failingSources: [],
+    errors: [],
+  };
 
   const feeds = await resolveSources(config);
-  const items = await fetchAllFeeds(feeds, deps.httpGet);
+  const { items, failures } = await fetchAllFeeds(feeds, deps.httpGet);
+  for (const source of updateSourceHealth(state, feeds, failures, now)) {
+    log(`❗ ${source.name} has been failing for 3 hours: ${source.error}`);
+  }
+  summary.failingSources = feeds.filter((f) => failures.has(f.id || f.url)).map((f) => f.name);
   const selected = selectNewItems(items, state, config, now);
+  if (selected.trump) await describeMediaPosts(selected.trump, deps.httpGet);
   summary.news = await postNews(selected, config, state, deps.discord, now);
 
   let scenarios = [];
   const optional = [
+    [
+      "trending",
+      async () => (summary.widelyReported = await postWidelyReported(config, state, deps, now)),
+    ],
     [
       "predictions",
       async () => {
@@ -408,6 +636,16 @@ export async function runCycle(config, state, deps) {
       },
     ],
     ["calendar", async () => (summary.calendar = await postCalendar(config, state, deps, now))],
+    [
+      "prices",
+      async () => {
+        const result = await postPrices(config, state, deps, now);
+        summary.priceAlerts = result.alerts;
+        summary.close = result.close;
+      },
+    ],
+    ["brief", async () => (summary.brief = await postBrief(config, state, deps, now))],
+    ["week", async () => (summary.week = await postWeekAhead(config, state, deps, now))],
     [
       "outlook",
       async () => (summary.outlook = await postOutlook(config, state, deps, scenarios, now)),
@@ -428,6 +666,27 @@ export async function runCycle(config, state, deps) {
   return summary;
 }
 
+/**
+ * Where this run's posts go: Discord, the console (--dry-run), or nowhere. Without a
+ * webhook the bot still reads the news when it has a feed file to write ("app-only"),
+ * so the web app keeps working while Discord is not set up.
+ */
+export function outputMode(config) {
+  if (config.dryRun) return "dry-run";
+  if (config.webhookUrl) return "discord";
+  return config.feedFile && !config.test ? "app-only" : "none";
+}
+
+/** The Discord client for this run. It only sends in "discord" mode. */
+export function createDiscord(config, { mode = outputMode(config), fetchImpl } = {}) {
+  return new DiscordWebhook(config.webhookUrl, {
+    dryRun: mode !== "discord",
+    log: mode === "app-only" ? () => {} : log,
+    gapMs: 2000,
+    fetchImpl,
+  });
+}
+
 async function sendTestMessage(config, discord) {
   await discord.send({
     username: config.username,
@@ -445,8 +704,9 @@ async function sendTestMessage(config, discord) {
 
 async function main() {
   const config = loadConfig();
+  const mode = outputMode(config);
 
-  if (!config.webhookUrl && !config.dryRun) {
+  if (mode === "none") {
     const msg = "DISCORD_WEBHOOK_URL is not set — nothing to do. See contrib/news-bot/README.md.";
     if (process.env.GITHUB_ACTIONS) {
       console.log(`::warning::${msg}`);
@@ -456,17 +716,19 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+  if (mode === "app-only") {
+    const msg =
+      "DISCORD_WEBHOOK_URL is not set, so nothing is posted to Discord; only the web app's " +
+      "feed is updated. See contrib/news-bot/README.md.";
+    console.log(process.env.GITHUB_ACTIONS ? `::warning::${msg}` : msg);
+  }
   if (config.webhookUrl && !isValidWebhookUrl(config.webhookUrl)) {
     console.error(`Not a Discord webhook URL: ${redactWebhook(config.webhookUrl)}`);
     process.exitCode = 1;
     return;
   }
 
-  const discord = new DiscordWebhook(config.webhookUrl, {
-    dryRun: config.dryRun,
-    log,
-    gapMs: 2000,
-  });
+  const discord = createDiscord(config, { mode });
   const deps = { discord, httpGet: createHttpGet(), fetchImpl: fetch };
 
   if (config.test) {
@@ -491,8 +753,12 @@ async function main() {
     try {
       const s = await runCycle(config, state, deps);
       log(
-        `Cycle done: ${s.news} stories, ${s.oddsMoves} odds alerts, digest=${s.digest}, ` +
-          `calendar=${s.calendar}, outlook=${s.outlook}${s.errors.length ? `, ${s.errors.length} errors` : ""}`
+        `Cycle done${mode === "app-only" ? " (app only, nothing posted)" : ""}: ` +
+          `${s.news} stories, ${s.oddsMoves} odds alerts, digest=${s.digest}, ` +
+          `calendar=${s.calendar}, market alerts=${s.priceAlerts}, close=${s.close}, widely reported=${s.widelyReported}, ` +
+          `brief=${s.brief}, week=${s.week}, ` +
+          `outlook=${s.outlook}${s.failingSources.length ? `, sources failed: ${s.failingSources.join(", ")}` : ""}` +
+          `${s.errors.length ? `, ${s.errors.length} errors` : ""}`
       );
     } catch (err) {
       log(`❌ Cycle failed: ${err.message}`);

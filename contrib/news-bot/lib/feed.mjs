@@ -4,14 +4,40 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+import { outletCounts } from "./coverage.mjs";
+
 export const FEED_VERSION = 1;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 const round = (value, digits) => Math.round(value * 10 ** digits) / 10 ** digits;
 
-/** The subset of a prediction-market scenario the app shows. */
-export function compactScenario(scenario) {
+// Odds history for the app's trend lines: one reading an hour, for three days.
+const HISTORY_STEP_MS = HOUR_MS;
+const HISTORY_KEEP_MS = 3 * DAY_MS;
+
+/**
+ * Add this run's odds to the history of every market shown in the app, at most one
+ * reading an hour. Markets no longer shown are dropped, so the state file stays small.
+ */
+export function recordOddsHistory(history = {}, scenarios, now = Date.now()) {
+  const next = {};
+  for (const scenario of scenarios) {
+    for (const market of scenario.markets.slice(0, 4)) {
+      const points = (history[market.id] || []).filter(([at]) => now - at <= HISTORY_KEEP_MS);
+      const last = points.at(-1);
+      // A little slack, so an hourly schedule that runs a minute early still records.
+      if (!last || now - last[0] >= HISTORY_STEP_MS - 5 * 60 * 1000) {
+        points.push([now, round(market.probability, 3)]);
+      }
+      next[market.id] = points;
+    }
+  }
+  return next;
+}
+
+/** The subset of a prediction-market scenario the app shows, with each market's trend. */
+export function compactScenario(scenario, history = {}) {
   return {
     id: scenario.id,
     title: scenario.title,
@@ -22,6 +48,7 @@ export function compactScenario(scenario) {
       question: m.question,
       probability: round(m.probability, 4),
       dayChange: m.dayChange === null ? null : round(m.dayChange, 4),
+      trend: (history[m.id] || []).map(([, probability]) => probability),
     })),
   };
 }
@@ -39,16 +66,26 @@ export function compactEvent(event) {
 }
 
 export function buildFeed(state, now = Date.now()) {
+  const counts = outletCounts(state);
   return {
     version: FEED_VERSION,
     generatedAt: new Date(now).toISOString(),
-    headlines: [...state.recentHeadlines].reverse(),
+    // How many outlets carried each story, when more than one did.
+    headlines: [...state.recentHeadlines].reverse().map((h) => {
+      const outlets = counts.get(h.link) || 0;
+      return outlets > 1 ? { ...h, outlets } : h;
+    }),
     scenarios: state.latestScenarios || [],
     oddsMoves: [...(state.recentOddsMoves || [])].reverse(),
     events: (state.calendarEvents || []).filter(
       (e) => e.time >= now - 2 * HOUR_MS && e.time < now + 7 * DAY_MS
     ),
     outlook: state.lastOutlook || null,
+    markets: state.marketQuotes || [],
+    // Sources that have been failing for hours, so the app can say what's missing.
+    downSources: Object.values(state.sourceHealth || {})
+      .filter((h) => h.down)
+      .map((h) => ({ name: h.name, since: h.since })),
   };
 }
 

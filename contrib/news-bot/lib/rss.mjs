@@ -110,9 +110,9 @@ export function parseFeed(xml) {
         getTag(block, "updated") ||
         getTag(block, "dc:date")
     );
-    const summary = stripHtml(
-      getTag(block, "description") || getTag(block, "summary") || getTag(block, "content")
-    );
+    const html =
+      getTag(block, "description") || getTag(block, "summary") || getTag(block, "content");
+    const summary = stripHtml(html);
     const source = stripHtml(getTag(block, "source"));
 
     items.push({
@@ -122,9 +122,26 @@ export function parseFeed(xml) {
       published,
       summary,
       source,
+      image: findImage(block, `${html} ${getTag(block, "content:encoded")}`),
     });
   }
   return items;
+}
+
+/** The story's picture: a media thumbnail or image, or the first image in its HTML (https only). */
+function findImage(block, html) {
+  const media =
+    getAttr(block, "media:content", "medium") === "video"
+      ? ""
+      : getAttr(block, "media:content", "url");
+  // The feed escapes the HTML, and the HTML escapes the attribute: decode both layers.
+  const src = decodeEntities(html).match(/<img\s[^>]*\bsrc\s*=\s*["']([^"']+)["']/i)?.[1];
+  const inline = src ? decodeEntities(src) : "";
+  return (
+    [getAttr(block, "media:thumbnail", "url"), media, inline].find((url) =>
+      /^https:\/\/[^\s"<>]+$/.test(url)
+    ) || ""
+  );
 }
 
 /** Google News appends " - Publisher" to every headline; drop it when we know the publisher. */
