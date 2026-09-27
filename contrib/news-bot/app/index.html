@@ -477,6 +477,16 @@
         border-radius: 2px;
         background: var(--dot, var(--muted));
       }
+      .wide {
+        display: inline-flex;
+        align-items: center;
+        padding: 1px 7px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-weight: 700;
+        font-size: 11px;
+      }
       .hot {
         display: inline-flex;
         align-items: center;
@@ -987,7 +997,12 @@
               el("span", { class: "cat", style: `--dot:${cat.color}` }, cat.label),
               who ? el("span", {}, who) : null,
               h.source && h.source !== who ? el("span", {}, `· ${h.source}`) : null,
-              h.hot ? el("span", { class: "hot", title: "Could move markets" }, "⚡ Market-moving") : null
+              h.hot ? el("span", { class: "hot", title: "Could move markets" }, "⚡ Market-moving") : null,
+              h.outlets >= 5
+                ? el("span", { class: "wide", title: "Carried by many outlets within hours" }, `🔥 ${h.outlets} outlets`)
+                : h.outlets > 1
+                  ? el("span", {}, `· ${h.outlets} outlets`)
+                  : null
             ),
             el("p", { class: "headline" }, title),
             isTrump && h.text ? el("p", { class: "post" }, h.text) : null

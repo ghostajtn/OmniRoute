@@ -5,6 +5,8 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+import { pruneCoverage } from "./coverage.mjs";
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SEEN_TTL_MS = 4 * DAY_MS;
 // The app keeps two days of headlines, capped per section so a busy section (the
@@ -35,6 +37,7 @@ export function emptyState() {
     lastWeekAheadDay: "",
     sourceHealth: {},
     oddsHistory: {},
+    coverage: {},
   };
 }
 
@@ -94,6 +97,7 @@ export function pruneState(state, now = Date.now()) {
     if (now - ts > SEEN_TTL_MS) delete state.seen[key];
   }
   state.recentHeadlines = trimHeadlines(state.recentHeadlines, now);
+  pruneCoverage(state, now);
   if (state.recentOddsMoves.length > MAX_RECENT_ODDS_MOVES) {
     state.recentOddsMoves = state.recentOddsMoves.slice(-MAX_RECENT_ODDS_MOVES);
   }

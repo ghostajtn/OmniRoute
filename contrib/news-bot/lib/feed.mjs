@@ -4,6 +4,8 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+import { outletCounts } from "./coverage.mjs";
+
 export const FEED_VERSION = 1;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -64,10 +66,15 @@ export function compactEvent(event) {
 }
 
 export function buildFeed(state, now = Date.now()) {
+  const counts = outletCounts(state);
   return {
     version: FEED_VERSION,
     generatedAt: new Date(now).toISOString(),
-    headlines: [...state.recentHeadlines].reverse(),
+    // How many outlets carried each story, when more than one did.
+    headlines: [...state.recentHeadlines].reverse().map((h) => {
+      const outlets = counts.get(h.link) || 0;
+      return outlets > 1 ? { ...h, outlets } : h;
+    }),
     scenarios: state.latestScenarios || [],
     oddsMoves: [...(state.recentOddsMoves || [])].reverse(),
     events: (state.calendarEvents || []).filter(
