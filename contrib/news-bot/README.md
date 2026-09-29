@@ -45,8 +45,22 @@ The workflow `.github/workflows/news-bot.yml` runs the bot every 15 minutes.
 3. Make sure the workflow file is on the repo's **default branch**. GitHub only runs scheduled workflows from that branch.
 4. Open **Actions → News Bot → Run workflow**. Tick _"Only send a test message"_ to check the webhook first, then
    run it again without the tick to post the first batch of news.
+5. Open **Settings → Environments → New environment**, name it `news-bot-timer` and click **Configure
+   environment**. Tick **Wait timer**, enter `14` minutes and click **Save protection rules**.
 
 The bot's memory of which stories it already posted is kept between runs in the Actions cache.
+
+#### How it keeps to 15 minutes
+
+GitHub starts scheduled runs of small repos only every few hours, however often the schedule asks for.
+So each run on the default branch starts the next one itself (the _"News Bot (every 15 min)"_ runs). That
+run first waits in the `news-bot-timer` environment: the wait timer does the waiting, so no runner is held
+and each run takes about a minute. Only one of these chained runs is lined up at a time.
+The schedule stays on as a backstop and restarts the chain if it ever stops.
+
+Without the wait timer (step 5), a chained run starts straight away, notices it didn't wait and stops the
+chain with a warning, so the bot falls back to GitHub's schedule. To stop the 15-minute runs, disable the
+workflow under **Actions → News Bot → ⋯ → Disable workflow**.
 
 If nothing arrives in Discord, open the latest **News Bot** run. The warning _"DISCORD_WEBHOOK_URL is not
 set"_ means the secret didn't reach the workflow. Check that it's listed under **Settings → Secrets and
@@ -72,10 +86,11 @@ secret: without it, each run still updates the app and posts nothing.
 
 Notes:
 
-- Public repos get Actions minutes for free. A private repo uses about 2,900 minutes a month at the
-  15-minute schedule, so change the cron to `7,37 * * * *` (every 30 minutes) to stay inside the free tier.
-- GitHub may start scheduled runs late or skip some when it is busy, and it pauses them after 60 days
-  without repository activity.
+- Public repos get Actions minutes for free. In a private repo each run counts about 4 minutes (every job
+  is rounded up to a whole minute), so the 15-minute pace would use far more than the free 2,000 minutes a
+  month. Keep the repo public, or set a longer wait timer.
+- GitHub pauses the workflow after 60 days without repository activity. It emails you when it does; turn it
+  back on under **Actions → News Bot → Enable workflow**.
 
 ## 2b. Or run it on any machine
 

@@ -1,12 +1,15 @@
 name: News Bot
+run-name: ${{ inputs.chained && 'News Bot (every 15 min)' || 'News Bot' }}
 
 # Runs contrib/news-bot every 15 minutes: posts to Discord and publishes the
 # News Radar web app (contrib/news-bot/app) with a fresh feed.json to GitHub Pages.
 # Setup: add the repository secret DISCORD_WEBHOOK_URL (Settings → Secrets and
 # variables → Actions), and set Settings → Pages → Source to "GitHub Actions".
 # Without the secret nothing is posted to Discord, but the app is still updated.
-# Scheduled runs only fire from the repository's default branch. See
-# contrib/news-bot/README.md.
+# GitHub starts scheduled runs of small repos only every few hours, so each run on
+# the default branch also starts the next one, which first waits in the
+# news-bot-timer environment: give it a 14-minute wait timer under Settings →
+# Environments. The schedule stays as a backstop. See contrib/news-bot/README.md.
 
 on:
   schedule:
@@ -18,18 +21,34 @@ on:
         description: "Only send a test message to check the webhook"
         type: boolean
         default: false
+      chained:
+        description: "Wait in the news-bot-timer environment first (set by the previous run)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-concurrency:
-  group: news-bot
-  cancel-in-progress: false
-
 jobs:
+  # Runs started by the previous run wait here. The environment's wait timer does the waiting,
+  # so no runner is held in the meantime.
+  wait:
+    if: ${{ inputs.chained }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: news-bot-timer
+    steps:
+      - run: echo "Waited in the news-bot-timer environment."
+
   post-news:
+    needs: wait
+    if: ${{ !cancelled() && (needs.wait.result == 'success' || needs.wait.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # One run at a time reads and saves the bot's memory.
+    concurrency:
+      group: news-bot
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -95,13 +114,48 @@ jobs:
         with:
           path: _site
 
+  # Starts the next run, which reads the news again after the 15-minute wait. It also runs after
+  # a failed cycle (a feed or Discord outage), so one bad run doesn't stop the chain.
+  next-run:
+    needs: post-news
+    if: >-
+      ${{ !cancelled() && !inputs.send_test_message &&
+      (needs.post-news.result == 'success' || needs.post-news.result == 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: news-bot-next-run
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: contrib/news-bot
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Start the next run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_FILE: news-bot.yml
+          CHAINED: ${{ inputs.chained }}
+        run: node contrib/news-bot/nextRun.mjs
+
   publish-app:
     needs: post-news
-    if: ${{ !inputs.send_test_message }}
+    if: ${{ !cancelled() && needs.post-news.result == 'success' && !inputs.send_test_message }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Posting news must not go red just because GitHub Pages is not switched on yet.
     continue-on-error: true
+    concurrency:
+      group: news-bot-pages
+      cancel-in-progress: false
     permissions:
       pages: write
       id-token: write
