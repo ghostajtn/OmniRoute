@@ -83,6 +83,25 @@ jobs:
           LLM_MODEL: ${{ vars.NEWS_BOT_LLM_MODEL }}
           NEWS_BOT_EXTRA_PEOPLE: ${{ vars.NEWS_BOT_EXTRA_PEOPLE }}
           NEWS_BOT_DISABLE: ${{ vars.NEWS_BOT_DISABLE }}
+          # Optional extras (all off until set): your stocks, SEC filings, urgent @mentions.
+          NEWS_BOT_TICKERS: ${{ vars.NEWS_BOT_TICKERS }}
+          NEWS_BOT_EXTRA_FUNDS: ${{ vars.NEWS_BOT_EXTRA_FUNDS }}
+          NEWS_BOT_SEC_CONTACT: ${{ secrets.NEWS_BOT_SEC_CONTACT }}
+          NEWS_BOT_PING: ${{ vars.NEWS_BOT_PING }}
+          # One Discord channel per topic (secrets DISCORD_WEBHOOK_<TOPIC>); the main one is the fallback.
+          NEWS_BOT_WEBHOOK_TRUMP: ${{ secrets.DISCORD_WEBHOOK_TRUMP }}
+          NEWS_BOT_WEBHOOK_OFFICIAL: ${{ secrets.DISCORD_WEBHOOK_OFFICIAL }}
+          NEWS_BOT_WEBHOOK_PEOPLE: ${{ secrets.DISCORD_WEBHOOK_PEOPLE }}
+          NEWS_BOT_WEBHOOK_BREAKING: ${{ secrets.DISCORD_WEBHOOK_BREAKING }}
+          NEWS_BOT_WEBHOOK_MARKETS: ${{ secrets.DISCORD_WEBHOOK_MARKETS }}
+          NEWS_BOT_WEBHOOK_WORLD: ${{ secrets.DISCORD_WEBHOOK_WORLD }}
+          NEWS_BOT_WEBHOOK_FILINGS: ${{ secrets.DISCORD_WEBHOOK_FILINGS }}
+          NEWS_BOT_WEBHOOK_STOCKS: ${{ secrets.DISCORD_WEBHOOK_STOCKS }}
+          NEWS_BOT_WEBHOOK_PREDICTIONS: ${{ secrets.DISCORD_WEBHOOK_PREDICTIONS }}
+          NEWS_BOT_WEBHOOK_CALENDAR: ${{ secrets.DISCORD_WEBHOOK_CALENDAR }}
+          NEWS_BOT_WEBHOOK_PRICES: ${{ secrets.DISCORD_WEBHOOK_PRICES }}
+          NEWS_BOT_WEBHOOK_EARNINGS: ${{ secrets.DISCORD_WEBHOOK_EARNINGS }}
+          NEWS_BOT_WEBHOOK_OUTLOOK: ${{ secrets.DISCORD_WEBHOOK_OUTLOOK }}
           NEWS_BOT_STATE_FILE: .news-bot-state/state.json
           NEWS_BOT_FEED_FILE: .news-bot-state/feed.json
           SEND_TEST: ${{ inputs.send_test_message }}

@@ -34,6 +34,9 @@ export function emptyState() {
     priceAlerts: {},
     lastCloseDay: "",
     lastBriefDay: "",
+    lastEarningsDay: "",
+    upcomingEarnings: [],
+    earningsAlerted: {},
     lastWeekAheadDay: "",
     sourceHealth: {},
     oddsHistory: {},
@@ -126,6 +129,7 @@ export function rememberHeadline(state, item, now = Date.now()) {
     category: item.category,
     published: item.published || null,
     hot: Boolean(item.hot),
+    urgent: Boolean(item.urgent),
     // Truth Social posts carry their text in the summary; other feeds only need the title.
     text: item.category === "trump" ? String(item.summary || "").slice(0, 600) : "",
     ...(item.mediaKind ? { media: item.mediaKind } : {}),

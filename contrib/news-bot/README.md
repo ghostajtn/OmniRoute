@@ -92,6 +92,39 @@ Notes:
 - GitHub pauses the workflow after 60 days without repository activity. It emails you when it does; turn it
   back on under **Actions → News Bot → Enable workflow**.
 
+### Optional extras
+
+Each of these is off until you set it. On GitHub, add secrets under **Settings → Secrets and variables →
+Actions → Secrets** and plain settings under **Variables**. On your own machine, use the environment
+variables of the same name.
+
+| Extra                 | Setting                                                  | What it does                                                                                                                                      |
+| --------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Your stocks           | Variable `NEWS_BOT_TICKERS` = `AAPL, TSLA, NVDA`         | One news search per stock (a **My stocks** section) and, with the next row, their earnings dates. Up to 25 symbols.                               |
+| Earnings dates        | the same `NEWS_BOT_TICKERS`                              | Nasdaq's public calendar: a heads-up when a report falls within a week and another the day before or the day of. Shown in the app's Calendar tab. |
+| SEC filings           | Secret `NEWS_BOT_SEC_CONTACT` = your email or a web page | Announces filings by big investors (Berkshire, Pershing Square, Bridgewater and more): quarterly 13F holdings and 13D / 13G stakes of 5%+.        |
+| More funds            | Variable `NEWS_BOT_EXTRA_FUNDS` = `Fund A, Fund B`       | Adds funds to the SEC list (names as they appear on EDGAR).                                                                                       |
+| Urgent @mentions      | Variable `NEWS_BOT_PING`                                 | Pings you for market-moving Trump / Fed / White House posts, 13D filings and widely reported stories. See below.                                  |
+| One channel per topic | Secrets `DISCORD_WEBHOOK_TRUMP`, `..._MARKETS`, ...      | Sends each topic to its own channel. See below.                                                                                                   |
+| Desktop alerts in app | the bell button in the app                               | A pop-up for each urgent story while the app is open.                                                                                             |
+
+**SEC contact.** The SEC refuses requests that don't say who is asking, so SEC filings stay off until you
+set `NEWS_BOT_SEC_CONTACT`. It is sent only to sec.gov, in the User-Agent. Keep it a secret on GitHub so it
+doesn't appear in public logs. Form 4 insider trades are not included: EDGAR's live feed is too busy to
+read every 15 minutes.
+
+**Urgent @mentions.** `NEWS_BOT_PING` takes any mix of `@here`, `@everyone`, `user:<id>` and `role:<id>`,
+for example `user:123456789012345678`. To get your ID, turn on **Settings → Advanced → Developer Mode** in
+Discord, then right-click your name and choose **Copy User ID**. The ping text is made by the bot and
+Discord is told to allow only the mentions you listed, so a headline containing "@everyone" can never ping
+anyone. At most 3 pings a run (`NEWS_BOT_MAX_PINGS`).
+
+**One channel per topic.** Make a webhook in each channel and save it as `DISCORD_WEBHOOK_<TOPIC>`, where
+the topic is one of `TRUMP`, `OFFICIAL`, `PEOPLE`, `BREAKING`, `MARKETS`, `WORLD`, `FILINGS`, `STOCKS`,
+`PREDICTIONS`, `CALENDAR`, `PRICES`, `EARNINGS` or `OUTLOOK` (locally: `NEWS_BOT_WEBHOOK_<TOPIC>`). Topics
+without their own webhook keep going to the main channel. **Run the workflow with "Only send a test
+message"** to check each one.
+
 ## 2b. Or run it on any machine
 
 It needs Node.js 22 or newer and nothing else.

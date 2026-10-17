@@ -43,6 +43,8 @@
         --c-people: #7b4fc4;
         --c-trump: #c76a17;
         --c-official: #3d5a73;
+        --c-stocks: #17794f;
+        --c-filings: #5f6f7b;
         --bar: #cfe3dd;
         --shadow: 0 1px 2px rgb(19 32 27 / 0.06), 0 4px 16px rgb(19 32 27 / 0.05);
         --serif: "Newsreader", "Iowan Old Style", Georgia, "Times New Roman", serif;
@@ -70,6 +72,8 @@
           --c-people: #b38cf0;
           --c-trump: #f0a04b;
           --c-official: #8fb3d1;
+          --c-stocks: #5fd0a0;
+          --c-filings: #a3b2bd;
           --bar: #1d3a33;
           --shadow: none;
         }
@@ -187,6 +191,11 @@
         to {
           transform: rotate(360deg);
         }
+      }
+      .iconbtn[aria-pressed="true"] {
+        background: var(--accent-soft);
+        border-color: var(--accent);
+        color: var(--accent);
       }
       .install {
         border: 0;
@@ -748,6 +757,12 @@
             <span class="pulse"></span><span id="status-text">Loading…</span>
           </div>
           <button class="install" id="install" hidden>Install app</button>
+          <button class="iconbtn" id="alerts" type="button" aria-pressed="false" aria-label="Turn on desktop alerts" hidden>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+              <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+            </svg>
+          </button>
           <button class="iconbtn" id="refresh" type="button" aria-label="Refresh news">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M21 12a9 9 0 1 1-2.64-6.36" />
@@ -767,7 +782,8 @@
       </main>
       <footer>
         Headlines from Google News, BBC, NPR, Al Jazeera, CNBC, MarketWatch, WSJ, Seeking Alpha, the
-        Federal Reserve, the White House, the ECB and the Truth Social archive at trumpstruth.org.
+        Federal Reserve, the White House, the ECB and the Truth Social archive at trumpstruth.org, plus
+        SEC EDGAR filings and Nasdaq earnings dates when switched on.
         Odds from Polymarket; calendar from Forex Factory; prices from Yahoo Finance, which may be
         delayed.
         Updated every 15 minutes by the News Radar bot. Odds are market prices, not predictions you
@@ -783,6 +799,8 @@
           people: { label: "Watchlist", color: "var(--c-people)" },
           trump: { label: "Trump", color: "var(--c-trump)" },
           official: { label: "Official", color: "var(--c-official)" },
+          stocks: { label: "Your stocks", color: "var(--c-stocks)" },
+          filings: { label: "SEC filings", color: "var(--c-filings)" },
           markets: { label: "Markets", color: "var(--c-markets)" },
           world: { label: "World", color: "var(--c-world)" },
           breaking: { label: "Top stories", color: "var(--c-breaking)" },
@@ -792,12 +810,16 @@
           ["people", "Watchlist"],
           ["trump", "Trump"],
           ["official", "Official"],
+          ["stocks", "My stocks"],
+          ["filings", "SEC filings"],
           ["markets", "Markets"],
           ["world", "World"],
           ["breaking", "Top stories"],
           ["odds", "What could happen"],
           ["events", "Calendar"],
         ];
+        // Shown only once the bot has something for them (they are switched on in its settings).
+        const OPTIONAL_TABS = new Set(["stocks", "filings"]);
         const FLAGS = { USD: "🇺🇸", EUR: "🇪🇺", GBP: "🇬🇧", JPY: "🇯🇵", CNY: "🇨🇳", CAD: "🇨🇦", AUD: "🇦🇺", NZD: "🇳🇿", CHF: "🇨🇭" };
         const REFRESH_MS = 5 * 60 * 1000;
         const STALE_MS = 45 * 60 * 1000;
@@ -943,7 +965,7 @@
           for (const h of view.feed?.headlines || []) counts[h.category] = (counts[h.category] || 0) + 1;
           const nav = $("tabs");
           nav.replaceChildren(
-            ...TABS.map(([id, label]) => {
+            ...TABS.filter(([id]) => !OPTIONAL_TABS.has(id) || counts[id] || view.tab === id).map(([id, label]) => {
               const n = id === "all" ? (view.feed?.headlines || []).length : counts[id];
               return el(
                 "button",
@@ -1167,7 +1189,31 @@
           target.append(section);
         }
 
+        function renderEarnings(target) {
+          const list = (view.feed?.earnings || []).filter((e) => e && e.symbol && e.date).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+          if (!list.length) return;
+          const dayFmt = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+          const box = el("div", { class: "events" });
+          for (const e of list) {
+            const detail = [e.when, e.eps ? `analysts expect ${e.eps} a share` : ""].filter(Boolean).join(" · ");
+            box.append(
+              el(
+                "div",
+                { class: "event" },
+                el("time", { datetime: e.date }, dayFmt.format(new Date(`${e.date}T12:00:00Z`))),
+                el("div", {}, el("div", { class: "name" }, `${e.symbol}${e.name ? ` · ${e.name}` : ""}`), detail ? el("div", { class: "nums" }, detail) : null)
+              )
+            );
+          }
+          target.append(el("section", {}, el("h2", { class: "section-title" }, "Your stocks report earnings"), box));
+        }
+
         function renderEvents(target, compact) {
+          renderCalendar(target, compact);
+          renderEarnings(target);
+        }
+
+        function renderCalendar(target, compact) {
           const now = Date.now();
           const events = (view.feed?.events || []).filter((e) => e.time >= now - 60 * 60 * 1000).sort((a, b) => a.time - b.time);
           const section = el("section", {}, el("h2", { class: "section-title" }, "Coming up"));
@@ -1327,6 +1373,74 @@
           return hintNode;
         }
 
+        // Desktop alerts: a pop-up for each new urgent story while the app is open (it can be
+        // minimised or in the background). Nothing is sent to any server.
+        const canNotify = "Notification" in window;
+        const alertsOn = () => canNotify && Notification.permission === "granted" && store.get("nr-alerts") === "1";
+
+        function renderAlertsButton() {
+          const button = $("alerts");
+          if (!canNotify) {
+            button.hidden = true;
+            return;
+          }
+          button.hidden = false;
+          const on = alertsOn();
+          button.setAttribute("aria-pressed", String(on));
+          button.setAttribute("aria-label", on ? "Turn off desktop alerts" : "Turn on desktop alerts");
+          button.title = Notification.permission === "denied" ? "Alerts are blocked in this browser's site settings" : "Pop-up alerts for urgent stories, while this app is open";
+        }
+
+        async function showAlert(title, body, url) {
+          const options = { body, tag: url || title, icon: "icon-192.png", data: { url } };
+          try {
+            const reg = await navigator.serviceWorker?.getRegistration();
+            if (reg?.showNotification) return await reg.showNotification(title, options);
+          } catch {
+            /* fall back to a page notification */
+          }
+          try {
+            const note = new Notification(title, options);
+            note.onclick = () => {
+              window.focus();
+              if (url) window.open(url, "_blank", "noopener");
+              note.close();
+            };
+          } catch {
+            /* notifications unavailable */
+          }
+        }
+
+        function checkAlerts() {
+          if (!alertsOn() || !view.feed) return;
+          const urgent = (view.feed.headlines || []).filter((h) => h && h.urgent && h.title);
+          const seen = Number(store.get("nr-alert-seen")) || 0;
+          if (!seen) {
+            store.set("nr-alert-seen", String(Date.parse(view.feed.generatedAt) || Date.now()));
+            return;
+          }
+          const fresh = urgent.filter((h) => Number(h.at) > seen).sort((a, b) => Number(a.at) - Number(b.at));
+          for (const h of fresh.slice(-3)) showAlert(`⚡ ${CATS[h.category]?.label || "Urgent"}`, h.title, safeUrl(h.link) || "");
+          const newest = Math.max(seen, ...fresh.map((h) => Number(h.at) || 0));
+          if (newest > seen) store.set("nr-alert-seen", String(newest));
+        }
+
+        $("alerts").addEventListener("click", async () => {
+          if (alertsOn()) {
+            store.set("nr-alerts", "0");
+          } else {
+            let permission = Notification.permission;
+            if (permission === "default") permission = await Notification.requestPermission();
+            if (permission === "granted") {
+              store.set("nr-alerts", "1");
+              store.set("nr-alert-seen", String(Date.parse(view.feed?.generatedAt) || Date.now()));
+              showAlert("Alerts are on", "You'll get a pop-up for each urgent story while this app is open.", "");
+            }
+          }
+          renderAlertsButton();
+        });
+        renderAlertsButton();
+
         async function load() {
           const button = $("refresh");
           button.classList.add("spin");
@@ -1335,6 +1449,7 @@
             if (!res.ok) throw new Error(res.status === 404 ? "No news yet. The first update arrives within 15 minutes." : `The news feed answered HTTP ${res.status}.`);
             view.feed = await res.json();
             view.error = res.headers.get("x-news-radar-cache") ? "offline" : "";
+            if (!view.error) checkAlerts();
           } catch (err) {
             view.error = err instanceof TypeError ? "You're offline. Showing the last news this device saved." : err.message;
           } finally {

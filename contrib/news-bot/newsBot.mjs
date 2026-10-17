@@ -40,6 +40,21 @@ import {
   formatPct,
   upcomingHighImpact,
 } from "./lib/markets.mjs";
+import {
+  EARNINGS_BROWSER_UA,
+  FUNDS,
+  channelWebhooks,
+  dueEarnings,
+  earningsDays,
+  earningsLine,
+  earningsUrl,
+  parseEarnings,
+  parsePing,
+  parseTickers,
+  secFeeds,
+  secTitle,
+  tickerFeeds,
+} from "./lib/extras.mjs";
 import { generateOutlook, isOutlookConfigured } from "./lib/outlook.mjs";
 import { detectBigMoves, fetchQuotes, quoteLine } from "./lib/prices.mjs";
 import { parseFeed } from "./lib/rss.mjs";
@@ -68,10 +83,19 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const HOUR_MS = 60 * 60 * 1000;
 const USER_AGENT = "Mozilla/5.0 (compatible; NewsRadarBot/1.0; +https://github.com/)";
 // Watchlist first so a story about a tracked person is labelled with their name.
-const CATEGORY_ORDER = ["trump", "official", "people", "breaking", "markets", "world"];
+const CATEGORY_ORDER = [
+  "trump",
+  "official",
+  "filings",
+  "people",
+  "stocks",
+  "breaking",
+  "markets",
+  "world",
+];
 // Truth Social posts and official statements are always posted, even when outlets carry
 // the same story; everything else is checked against the last 12 hours of posts.
-const NEVER_MERGED = new Set(["trump", "official"]);
+const NEVER_MERGED = new Set(["trump", "official", "filings"]);
 const SAME_STORY_WINDOW_MS = 12 * HOUR_MS;
 
 function log(message) {
@@ -119,6 +143,13 @@ export function loadConfig(env = process.env, argv = process.argv.slice(2)) {
     llmApiKey: env.LLM_API_KEY || "",
     llmModel: env.LLM_MODEL || "",
     outlookEveryHours: num(env.NEWS_BOT_OUTLOOK_EVERY_HOURS, 6),
+    // Optional extras: your stocks, SEC filings, urgent @mentions, one channel per topic.
+    tickers: parseTickers(env.NEWS_BOT_TICKERS),
+    secContact: (env.NEWS_BOT_SEC_CONTACT || "").trim(),
+    extraFunds: list(env.NEWS_BOT_EXTRA_FUNDS) || [],
+    ping: parsePing(env.NEWS_BOT_PING),
+    maxPingsPerCycle: num(env.NEWS_BOT_MAX_PINGS, 3),
+    channelWebhooks: channelWebhooks(env, Object.keys(CATEGORIES)),
   };
 }
 
@@ -135,15 +166,17 @@ export async function resolveSources(config) {
     );
   }
   people = [...people, ...config.extraPeople.map((name) => ({ name }))];
-  return buildFeedList({ feeds, people, trump: !config.disabled.has("trump") }).filter(
-    (feed) => !config.disabled.has(feed.category)
-  );
+  return [
+    ...buildFeedList({ feeds, people, trump: !config.disabled.has("trump") }),
+    ...tickerFeeds(config.tickers),
+    ...secFeeds(config.secContact, [...FUNDS, ...config.extraFunds]),
+  ].filter((feed) => !config.disabled.has(feed.category));
 }
 
 export function createHttpGet(fetchImpl = fetch) {
-  return async function httpGet(url) {
+  return async function httpGet(url, options = {}) {
     const res = await fetchImpl(url, {
-      headers: { "User-Agent": USER_AGENT, Accept: "*/*" },
+      headers: { "User-Agent": options.userAgent || USER_AGENT, Accept: options.accept || "*/*" },
       redirect: "follow",
       signal: AbortSignal.timeout(20000),
     });
@@ -170,11 +203,13 @@ async function fetchAllFeeds(feeds, httpGet) {
   const failures = new Map();
   const perFeed = await mapLimit(feeds, 4, async (feed) => {
     try {
-      const items = parseFeed(await httpGet(feed.url)).filter((item) =>
-        feedAccepts(feed, item.title)
+      const items = parseFeed(await httpGet(feed.url, { userAgent: feed.userAgent })).filter(
+        (item) => feedAccepts(feed, item.title)
       );
       return items.map((item) => ({
         ...item,
+        title: feed.kind === "sec" ? secTitle(item.title, feed) : item.title,
+        form: feed.form,
         category: feed.category,
         feedName: feed.name,
         person: feed.person,
@@ -278,6 +313,18 @@ export function isHot(item) {
   return isMarketMoving(item.category === "trump" ? `${item.title} ${item.summary}` : item.title);
 }
 
+/**
+ * Stories worth an @mention (when NEWS_BOT_PING is set): market-moving words from Trump or
+ * an official body, and 13D stake filings by the funds followed.
+ */
+export function isUrgent(item) {
+  if (item.category === "filings") return item.form === "13D";
+  return (item.category === "trump" || item.category === "official") && isHot(item);
+}
+
+// Each topic goes to its own channel when it has a webhook, else to the main one.
+const discordFor = (deps, category) => deps.discordFor?.(category) || deps.discord;
+
 export function newsEmbed(item) {
   const category = CATEGORIES[item.category] || CATEGORIES.breaking;
   const isTruth = item.category === "trump";
@@ -358,19 +405,29 @@ function localDayAndHour(now, timeZone) {
   };
 }
 
-async function postNews(selected, config, state, discord, now) {
+async function postNews(selected, config, state, deps, now) {
   let posted = 0;
+  let pings = 0;
   for (const category of Object.keys(selected)) {
     const items = selected[category];
     const meta = CATEGORIES[category] || CATEGORIES.breaking;
     let done = 0;
-    await discord.sendEmbeds(items.map(newsEmbed), {
+    await discordFor(deps, category).sendEmbeds(items.map(newsEmbed), {
       username: `${config.username} • ${meta.label}`,
+      // Only the message that carries an urgent story pings, and only a few times a run.
+      mentionFor: config.ping
+        ? (start, count) => {
+            if (pings >= config.maxPingsPerCycle) return null;
+            if (!items.slice(start, start + count).some(isUrgent)) return null;
+            pings++;
+            return config.ping;
+          }
+        : undefined,
       // Mark stories as posted batch by batch, so a failure never re-posts sent ones.
       onSent: (count) => {
         for (const item of items.slice(done, done + count)) {
           markSeen(state, item, now);
-          rememberHeadline(state, { ...item, hot: isHot(item) }, now);
+          rememberHeadline(state, { ...item, hot: isHot(item), urgent: isUrgent(item) }, now);
         }
         done += count;
         posted += count;
@@ -381,7 +438,8 @@ async function postNews(selected, config, state, discord, now) {
 }
 
 async function postPredictions(config, state, deps, now) {
-  const { discord, httpGet } = deps;
+  const { httpGet } = deps;
+  const discord = discordFor(deps, "predictions");
   const scenarios = await fetchScenarios(httpGet, { tags: config.marketTags });
   const tracked = scenarios.slice(0, 25);
 
@@ -436,7 +494,7 @@ async function postCalendar(config, state, deps, now) {
   const events = upcomingHighImpact(week, { now, hours: 36 });
   state.lastCalendarDay = day;
   if (!events.length) return 0;
-  await deps.discord.sendEmbeds(
+  await discordFor(deps, "calendar").sendEmbeds(
     [
       {
         color: CATEGORIES.calendar.color,
@@ -470,7 +528,7 @@ async function postPrices(config, state, deps, now) {
 
   const { moves, alerted } = detectBigMoves(quotes, state.priceAlerts, { now });
   if (moves.length) {
-    await deps.discord.sendEmbeds(
+    await discordFor(deps, "prices").sendEmbeds(
       [
         {
           color: moves[0].change < 0 ? 0xe74c3c : 0x2ecc71,
@@ -491,7 +549,7 @@ async function postPrices(config, state, deps, now) {
   const tradedToday = sp500 && localDayAndHour(sp500.asOf, MARKET_TIME_ZONE).day === market.day;
   let close = false;
   if (closed && tradedToday && state.lastCloseDay !== market.day) {
-    await deps.discord.sendEmbeds(
+    await discordFor(deps, "prices").sendEmbeds(
       [
         {
           color: sp500.change < 0 ? 0xe74c3c : 0x2ecc71,
@@ -519,7 +577,7 @@ async function postWidelyReported(config, state, deps, now) {
   let posted = 0;
   for (const entry of widelyReported(state, now)) {
     const names = entry.sources.slice(0, 8).join(", ");
-    await deps.discord.sendEmbeds(
+    await discordFor(deps, "breaking").sendEmbeds(
       [
         {
           color: 0xe8590c,
@@ -533,7 +591,7 @@ async function postWidelyReported(config, state, deps, now) {
           footer: { text: "When many outlets carry one story within hours, it's usually big news" },
         },
       ],
-      { username: `${config.username} • Widely Reported` }
+      { username: `${config.username} • Widely Reported`, mention: config.ping || undefined }
     );
     entry.alerted = true;
     posted++;
@@ -542,6 +600,52 @@ async function postWidelyReported(config, state, deps, now) {
 }
 
 /** Post the morning brief once a day, at NEWS_BOT_BRIEF_AT local time or soon after. */
+/**
+ * Earnings dates for the stocks in NEWS_BOT_TICKERS, from Nasdaq's public calendar: one
+ * heads-up when a report first falls within a week, and another the day before or the day of.
+ * The dates also go to the web app.
+ */
+async function postEarnings(config, state, deps, now) {
+  if (!config.tickers.length) return 0;
+  const { day } = localDayAndHour(now, MARKET_TIME_ZONE);
+  if (state.lastEarningsDay !== day) {
+    const days = earningsDays(day, 8);
+    const perDay = await mapLimit(days, 3, async (d) =>
+      parseEarnings(
+        await deps.httpGet(earningsUrl(d), {
+          userAgent: EARNINGS_BROWSER_UA,
+          accept: "application/json",
+        }),
+        d,
+        config.tickers
+      )
+    );
+    state.upcomingEarnings = perDay.flat();
+    state.lastEarningsDay = day;
+  }
+
+  state.earningsAlerted ||= {};
+  for (const [key, at] of Object.entries(state.earningsAlerted)) {
+    if (now - at > 30 * 24 * HOUR_MS) delete state.earningsAlerted[key];
+  }
+  const due = dueEarnings(state.upcomingEarnings || [], state.earningsAlerted, day);
+  if (!due.length) return 0;
+  await discordFor(deps, "earnings").sendEmbeds(
+    [
+      {
+        color: CATEGORIES.earnings.color,
+        title: "📢 Earnings coming up for your stocks",
+        description: due.map(earningsLine).join("\n"),
+        footer: { text: "Earnings dates from Nasdaq · they can move the stock a lot" },
+      },
+    ],
+    { username: `${config.username} • ${CATEGORIES.earnings.label}` }
+  );
+  // Only now that Discord has the message are they marked as announced.
+  for (const entry of due) for (const key of entry.keys) state.earningsAlerted[key] = now;
+  return due.length;
+}
+
 async function postBrief(config, state, deps, now) {
   const { day, hour, minute } = localDayAndHour(now, config.timeZone);
   const [briefHour, briefMinute] = config.briefAt.split(":").map(Number);
@@ -574,7 +678,7 @@ async function postOutlook(config, state, deps, scenarios, now) {
   if (now - state.lastOutlookAt < config.outlookEveryHours * HOUR_MS) return false;
   if (state.recentHeadlines.length < 5) return false;
   const text = await generateOutlook(config, state.recentHeadlines, scenarios, deps.fetchImpl);
-  await deps.discord.sendEmbeds(
+  await discordFor(deps, "outlook").sendEmbeds(
     [
       {
         color: CATEGORIES.outlook.color,
@@ -603,6 +707,7 @@ export async function runCycle(config, state, deps) {
     priceAlerts: 0,
     close: false,
     widelyReported: 0,
+    earnings: 0,
     brief: false,
     week: false,
     outlook: false,
@@ -618,7 +723,7 @@ export async function runCycle(config, state, deps) {
   summary.failingSources = feeds.filter((f) => failures.has(f.id || f.url)).map((f) => f.name);
   const selected = selectNewItems(items, state, config, now);
   if (selected.trump) await describeMediaPosts(selected.trump, deps.httpGet);
-  summary.news = await postNews(selected, config, state, deps.discord, now);
+  summary.news = await postNews(selected, config, state, deps, now);
 
   let scenarios = [];
   const optional = [
@@ -636,6 +741,7 @@ export async function runCycle(config, state, deps) {
       },
     ],
     ["calendar", async () => (summary.calendar = await postCalendar(config, state, deps, now))],
+    ["earnings", async () => (summary.earnings = await postEarnings(config, state, deps, now))],
     [
       "prices",
       async () => {
@@ -687,6 +793,35 @@ export function createDiscord(config, { mode = outputMode(config), fetchImpl } =
   });
 }
 
+/**
+ * The main Discord client plus one per topic that has its own webhook. Webhooks that
+ * aren't Discord webhook URLs are ignored (and never printed).
+ */
+export function createDiscords(config, { mode = outputMode(config), fetchImpl } = {}) {
+  const main = createDiscord(config, { mode, fetchImpl });
+  const byUrl = new Map([[config.webhookUrl, main]]);
+  const byCategory = {};
+  for (const [category, url] of Object.entries(config.channelWebhooks || {})) {
+    if (!isValidWebhookUrl(url)) {
+      log(`Ignoring NEWS_BOT_WEBHOOK_${category.toUpperCase()}: not a Discord webhook URL.`);
+      continue;
+    }
+    if (!byUrl.has(url)) {
+      byUrl.set(
+        url,
+        new DiscordWebhook(url, {
+          dryRun: mode !== "discord",
+          log: mode === "app-only" ? () => {} : log,
+          gapMs: 2000,
+          fetchImpl,
+        })
+      );
+    }
+    byCategory[category] = byUrl.get(url);
+  }
+  return { discord: main, discordFor: (category) => byCategory[category] || main, byCategory };
+}
+
 async function sendTestMessage(config, discord) {
   await discord.send({
     username: config.username,
@@ -728,11 +863,24 @@ async function main() {
     return;
   }
 
-  const discord = createDiscord(config, { mode });
-  const deps = { discord, httpGet: createHttpGet(), fetchImpl: fetch };
+  const { discord, discordFor: channelFor, byCategory } = createDiscords(config, { mode });
+  const deps = { discord, discordFor: channelFor, httpGet: createHttpGet(), fetchImpl: fetch };
 
   if (config.test) {
     await sendTestMessage(config, discord);
+    for (const [category, client] of Object.entries(byCategory)) {
+      if (client === discord) continue;
+      await client.send({
+        username: config.username,
+        embeds: [
+          {
+            color: CATEGORIES[category].color,
+            title: `✅ ${CATEGORIES[category].label} channel is connected`,
+            description: `${CATEGORIES[category].emoji} ${CATEGORIES[category].label} will be posted here.`,
+          },
+        ],
+      });
+    }
     log("Test message sent.");
     return;
   }
@@ -755,7 +903,7 @@ async function main() {
       log(
         `Cycle done${mode === "app-only" ? " (app only, nothing posted)" : ""}: ` +
           `${s.news} stories, ${s.oddsMoves} odds alerts, digest=${s.digest}, ` +
-          `calendar=${s.calendar}, market alerts=${s.priceAlerts}, close=${s.close}, widely reported=${s.widelyReported}, ` +
+          `calendar=${s.calendar}, earnings=${s.earnings}, market alerts=${s.priceAlerts}, close=${s.close}, widely reported=${s.widelyReported}, ` +
           `brief=${s.brief}, week=${s.week}, ` +
           `outlook=${s.outlook}${s.failingSources.length ? `, sources failed: ${s.failingSources.join(", ")}` : ""}` +
           `${s.errors.length ? `, ${s.errors.length} errors` : ""}`
