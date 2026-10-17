@@ -119,15 +119,17 @@ export class DiscordWebhook {
   }
 
   /**
-   * Post one message. Mentions are always disabled so a headline containing
-   * "@everyone" can never ping the server.
+   * Post one message. Mentions are disabled, so a headline containing "@everyone" can
+   * never ping the server. The one exception is `mention` ({content, allowed}, from
+   * parsePing): text the operator configured, with exactly the mentions they allowed.
    */
-  async send({ username, content, embeds = [] }) {
+  async send({ username, content, embeds = [], mention }) {
+    const text = [mention?.content, content].filter(Boolean).join("\n");
     const payload = {
       username: username ? truncate(username, LIMITS.username) : undefined,
-      content: content ? truncate(content, 2000) : undefined,
+      content: text ? truncate(text, 2000) : undefined,
       embeds: embeds.map(clampEmbed),
-      allowed_mentions: { parse: [] },
+      allowed_mentions: mention ? mention.allowed : { parse: [] },
     };
 
     if (this.dryRun) {
@@ -191,13 +193,24 @@ export class DiscordWebhook {
   /**
    * Post any number of embeds, split across as many messages as needed.
    * `onSent(count)` is called after each message with how many embeds it carried.
+   * `mention` pings on the first message; `mentionFor(start, count)` decides per message
+   * (it gets the position of the message's first embed and how many it carries).
    */
-  async sendEmbeds(embeds, { username, content, onSent } = {}) {
+  async sendEmbeds(embeds, { username, content, onSent, mention, mentionFor } = {}) {
     const batches = chunkEmbeds(embeds);
+    let offset = 0;
     for (let i = 0; i < batches.length; i++) {
       const first = i === 0 ? content : undefined;
+      const start = offset;
+      offset += batches[i].length;
+      const ping = mentionFor ? mentionFor(start, batches[i].length) : i === 0 ? mention : null;
       try {
-        await this.send({ username, content: first, embeds: batches[i] });
+        await this.send({
+          username,
+          content: first,
+          embeds: batches[i],
+          mention: ping || undefined,
+        });
         onSent?.(batches[i].length);
       } catch (err) {
         // HTTP 400 means something in the message is malformed. Retrying the same batch
@@ -208,7 +221,12 @@ export class DiscordWebhook {
         for (const [j, embed] of batches[i].entries()) {
           try {
             if (alone) throw err;
-            await this.send({ username, content: j === 0 ? first : undefined, embeds: [embed] });
+            await this.send({
+              username,
+              content: j === 0 ? first : undefined,
+              embeds: [embed],
+              mention: j === 0 ? ping || undefined : undefined,
+            });
           } catch (rejected) {
             if (rejected.status !== 400) throw rejected;
             this.log(

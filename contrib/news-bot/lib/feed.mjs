@@ -80,6 +80,9 @@ export function buildFeed(state, now = Date.now()) {
     events: (state.calendarEvents || []).filter(
       (e) => e.time >= now - 2 * HOUR_MS && e.time < now + 7 * DAY_MS
     ),
+    earnings: (state.upcomingEarnings || []).filter(
+      (e) => e.date >= new Date(now - DAY_MS).toISOString().slice(0, 10)
+    ),
     outlook: state.lastOutlook || null,
     markets: state.marketQuotes || [],
     // Sources that have been failing for hours, so the app can say what's missing.
