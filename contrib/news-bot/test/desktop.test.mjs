@@ -11,6 +11,7 @@ import {
   appWindowArgs,
   applySettingsChange,
   browserCandidates,
+  defaultBrowserFromRegistry,
   isOwnRequest,
   normalizeSettings,
   publicSettings,
@@ -366,4 +367,30 @@ test("closing the window quits News Radar, but a hand-off to a running browser d
   const failed = watchWindow(broken, now);
   broken.emit("error", new Error("spawn failed"));
   assert.equal(await failed, false);
+});
+
+test("browser: your default browser or your choice goes first", () => {
+  const env = { ProgramFiles: "C:\\Program Files", "ProgramFiles(x86)": "C:\\Program Files (x86)" };
+  const names = (prefer) => browserCandidates(env, prefer).map((p) => p.split("\\").at(-1));
+  assert.deepEqual(names(null), ["msedge.exe", "msedge.exe", "chrome.exe", "chrome.exe"]);
+  assert.deepEqual(names("edge"), ["msedge.exe", "msedge.exe", "chrome.exe", "chrome.exe"]);
+  assert.deepEqual(names("chrome"), ["chrome.exe", "chrome.exe", "msedge.exe", "msedge.exe"]);
+
+  const reg = (id) =>
+    `\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice\r\n    ProgId    REG_SZ    ${id}\r\n`;
+  assert.equal(defaultBrowserFromRegistry(reg("ChromeHTML")), "chrome");
+  assert.equal(defaultBrowserFromRegistry(reg("MSEdgeHTM")), "edge");
+  assert.equal(defaultBrowserFromRegistry(reg("FirefoxURL-308046B0AF4A39CB")), null);
+  assert.equal(defaultBrowserFromRegistry(""), null);
+  assert.equal(defaultBrowserFromRegistry(undefined), null);
+});
+
+test("the browser setting accepts only auto, chrome or edge", () => {
+  assert.equal(normalizeSettings({}).browser, "auto");
+  assert.equal(normalizeSettings({ browser: "chrome" }).browser, "chrome");
+  assert.equal(normalizeSettings({ browser: "firefox" }).browser, "auto");
+  const current = normalizeSettings({ browser: "edge" });
+  assert.equal(applySettingsChange(current, { browser: "chrome" }).settings.browser, "chrome");
+  assert.equal(applySettingsChange(current, { browser: "netscape" }).settings.browser, "edge");
+  assert.equal(publicSettings(current).browser, "edge");
 });

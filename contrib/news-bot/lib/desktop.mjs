@@ -11,7 +11,11 @@ export const DEFAULT_SETTINGS = {
   secContact: "",
   ping: "",
   refreshMinutes: 5,
+  browser: "auto",
 };
+
+// Which browser shows the app window: the default browser if it is Chrome or Edge, or a choice.
+export const BROWSERS = new Set(["auto", "chrome", "edge"]);
 
 const clampMinutes = (value, fallback) => {
   const n = Math.round(Number(value));
@@ -30,6 +34,7 @@ export function normalizeSettings(raw) {
     secContact: typeof input.secContact === "string" ? input.secContact.trim().slice(0, 200) : "",
     ping: parsePing(input.ping) && typeof input.ping === "string" ? input.ping.trim() : "",
     refreshMinutes: clampMinutes(input.refreshMinutes, DEFAULT_SETTINGS.refreshMinutes),
+    browser: BROWSERS.has(input.browser) ? input.browser : DEFAULT_SETTINGS.browser,
   };
 }
 
@@ -61,6 +66,9 @@ export function applySettingsChange(current, change) {
     if (!ping || parsePing(ping)) next.ping = ping;
     else problems.push("The ping must be @here, @everyone, user:<id> or role:<id>.");
   }
+
+  if (typeof input.browser === "string" && BROWSERS.has(input.browser))
+    next.browser = input.browser;
 
   if ("refreshMinutes" in input) {
     next.refreshMinutes = clampMinutes(input.refreshMinutes, current.refreshMinutes);
@@ -131,19 +139,33 @@ export function staticFile(pathname) {
   return STATIC_FILES[pathname] || null;
 }
 
-/** Where Edge (then Chrome) usually lives on Windows, most likely first. */
-export function browserCandidates(env) {
+/**
+ * Which browser the user's default web browser is, from the registry value
+ * `reg query "HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice" /v ProgId`.
+ * Returns "chrome", "edge", or null for anything else (Firefox and so on).
+ */
+export function defaultBrowserFromRegistry(output) {
+  const progId = /ProgId\s+REG_SZ\s+(\S+)/i.exec(String(output || ""))?.[1] || "";
+  if (/^ChromeHTML/i.test(progId)) return "chrome";
+  if (/^MSEdgeHTM/i.test(progId)) return "edge";
+  return null;
+}
+
+/**
+ * Where Chrome and Edge usually live on Windows, the preferred one first ("chrome" or "edge";
+ * without a preference, Edge first because every Windows 10/11 has it).
+ */
+export function browserCandidates(env, prefer = null) {
   const pf86 = env["ProgramFiles(x86)"];
   const pf = env.ProgramFiles;
   const local = env.LOCALAPPDATA;
-  const found = [];
-  for (const base of [pf86, pf, local]) {
-    if (base) found.push(`${base}\\Microsoft\\Edge\\Application\\msedge.exe`);
-  }
-  for (const base of [pf, pf86, local]) {
-    if (base) found.push(`${base}\\Google\\Chrome\\Application\\chrome.exe`);
-  }
-  return found;
+  const edge = [pf86, pf, local]
+    .filter(Boolean)
+    .map((base) => `${base}\\Microsoft\\Edge\\Application\\msedge.exe`);
+  const chrome = [pf, pf86, local]
+    .filter(Boolean)
+    .map((base) => `${base}\\Google\\Chrome\\Application\\chrome.exe`);
+  return prefer === "chrome" ? [...chrome, ...edge] : [...edge, ...chrome];
 }
 
 /**

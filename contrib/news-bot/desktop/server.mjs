@@ -6,7 +6,7 @@
 //
 // Your settings and the news live in NEWS_RADAR_HOME (default: ~/.news-radar).
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, statSync, truncateSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -20,6 +20,7 @@ import {
   appWindowArgs,
   applySettingsChange,
   browserCandidates,
+  defaultBrowserFromRegistry,
   isOwnRequest,
   normalizeSettings,
   publicSettings,
@@ -35,6 +36,18 @@ export const DEFAULT_PORT = 47821;
 const MAX_BODY = 10 * 1024;
 
 const stamp = () => new Date().toLocaleTimeString();
+
+/** The saved settings (defaults for anything missing or broken). */
+export async function readSettings(home) {
+  try {
+    return normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      ...JSON.parse(await readFile(join(home, "settings.json"), "utf8")),
+    });
+  } catch {
+    return normalizeSettings(DEFAULT_SETTINGS);
+  }
+}
 
 /**
  * Start the server and the news cycle. Returns what a caller needs to talk to or stop it.
@@ -55,16 +68,7 @@ export async function startServer({
     feed: join(home, "feed.json"),
   };
 
-  async function loadSettings() {
-    try {
-      return normalizeSettings({
-        ...DEFAULT_SETTINGS,
-        ...JSON.parse(await readFile(files.settings, "utf8")),
-      });
-    } catch {
-      return normalizeSettings(DEFAULT_SETTINGS);
-    }
-  }
+  const loadSettings = () => readSettings(home);
   async function saveSettings(settings) {
     // Holds the Discord webhook, so only the owner may read it.
     await writeFile(files.settings, JSON.stringify(settings, null, 2), { mode: 0o600 });
@@ -247,10 +251,11 @@ export function watchWindow(child, now = Date.now) {
  * Returns `closed`, a promise that resolves to true when that window's session has ended
  * (only for a window we started and can watch), otherwise null.
  */
-export function openWindow(url, home, { watch = true } = {}) {
+export function openWindow(url, home, { watch = true, browser: choice = "auto" } = {}) {
   const env = { ...process.env, NEWS_RADAR_URL: url };
   if (process.platform === "win32") {
-    const browser = browserCandidates(process.env).find((path) => existsSync(path));
+    const prefer = choice === "auto" ? defaultBrowser() : choice;
+    const browser = browserCandidates(process.env, prefer).find((path) => existsSync(path));
     if (browser) {
       const child = spawn(browser, appWindowArgs(url, join(home, "browser-profile")), {
         stdio: "ignore",
@@ -274,6 +279,25 @@ export function openWindow(url, home, { watch = true } = {}) {
   const opener = process.platform === "darwin" ? "open" : "xdg-open";
   spawn(opener, [url], { env, detached: true, stdio: "ignore" }).unref();
   return { closed: null };
+}
+
+/** "chrome" or "edge" when that is the user's default browser (Windows only), else null. */
+function defaultBrowser() {
+  try {
+    const result = spawnSync(
+      "reg",
+      [
+        "query",
+        "HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice",
+        "/v",
+        "ProgId",
+      ],
+      { encoding: "utf8", timeout: 5000, windowsHide: true }
+    );
+    return defaultBrowserFromRegistry(result.stdout);
+  } catch {
+    return null;
+  }
 }
 
 /** A logger that prints and also appends to news-radar.log (the app runs without a console). */
@@ -333,7 +357,10 @@ async function main() {
       if (err.code !== "EADDRINUSE") throw err;
       if (await isNewsRadar(port)) {
         log("News Radar is already running. Opening another window.");
-        if (!noOpen) openWindow(`http://127.0.0.1:${port}/`, home, { watch: false });
+        if (!noOpen) {
+          const { browser } = await readSettings(home);
+          openWindow(`http://127.0.0.1:${port}/`, home, { watch: false, browser });
+        }
         return;
       }
     }
@@ -354,7 +381,8 @@ async function main() {
   process.on("SIGTERM", quit);
 
   if (!noOpen) {
-    const { closed } = openWindow(app.url, home);
+    const { browser } = await readSettings(home);
+    const { closed } = openWindow(app.url, home, { browser });
     log(`The app window is at ${app.url}`);
     // Closing the window quits News Radar.
     closed?.then((ended) => ended && quit());

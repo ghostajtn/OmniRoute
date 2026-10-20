@@ -891,6 +891,14 @@
           <option value="30">30 minutes</option>
           <option value="60">60 minutes</option>
         </select>
+        <label for="set-browser">Open News Radar in
+          <span class="hint">Used the next time you start it. Automatic uses your default browser when it is Chrome or Edge.</span>
+        </label>
+        <select id="set-browser">
+          <option value="auto">Automatic</option>
+          <option value="chrome">Google Chrome</option>
+          <option value="edge">Microsoft Edge</option>
+        </select>
         <label for="set-sec">SEC filings: your email (optional)
           <span class="hint">Turns on filings by big investors (Berkshire, Pershing Square and more). The SEC requires a contact; it is sent only to sec.gov.</span>
         </label>
@@ -1626,6 +1634,7 @@
           const s = desktop.settings || {};
           $("set-tickers").value = s.tickers || "";
           $("set-minutes").value = String(s.refreshMinutes || 5);
+          $("set-browser").value = s.browser || "auto";
           $("set-sec").value = s.secContact || "";
           $("set-ping").value = s.ping || "";
           $("set-webhook").value = "";
@@ -1643,6 +1652,7 @@
             const saved = await desktopPost("api/settings", {
               tickers: $("set-tickers").value,
               refreshMinutes: Number($("set-minutes").value),
+              browser: $("set-browser").value,
               secContact: $("set-sec").value,
               ping: $("set-ping").value,
               discordWebhook: $("set-webhook").value,
