@@ -125,6 +125,34 @@ the topic is one of `TRUMP`, `OFFICIAL`, `PEOPLE`, `BREAKING`, `MARKETS`, `WORLD
 without their own webhook keep going to the main channel. **Run the workflow with "Only send a test
 message"** to check each one.
 
+## 2c. News Radar as a Windows app (no GitHub needed)
+
+`desktop/` turns the bot and the web app into an app that runs on your own PC. It collects the news itself
+every few minutes, keeps it on your computer and shows it in its own window (Edge, without an address
+bar). It needs no GitHub, Discord or account.
+
+Build the download and give it to anyone with Windows 10 or 11:
+
+```bash
+python3 contrib/news-bot/desktop/windows/build_zip.py NewsRadar-Windows.zip
+```
+
+Unzipped, double-click **News Radar.bat**. The first start downloads a private copy of Node.js (35 MB,
+checked against a pinned SHA-256, nothing installed system-wide), copies the program to
+`%LOCALAPPDATA%\NewsRadar` and adds a desktop shortcut. The gear button in the app sets your stocks, how
+often to look for news, an SEC contact and an optional Discord webhook.
+
+If you already have Node.js 22+, you can also run it directly on any system:
+
+```bash
+node contrib/news-bot/desktop/server.mjs   # data in ~/.news-radar, or set NEWS_RADAR_HOME
+```
+
+The server listens only on `127.0.0.1`. It serves just the app's own files and `feed.json`; it refuses
+requests whose `Host` is not this computer (DNS rebinding), and the endpoints that change anything also
+need the app's own header and a matching `Origin`. The Discord webhook is stored in `settings.json`
+(owner-only) and is never sent back to the page.
+
 ## 2b. Or run it on any machine
 
 It needs Node.js 22 or newer and nothing else.

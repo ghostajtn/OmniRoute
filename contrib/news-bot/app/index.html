@@ -197,6 +197,82 @@
         border-color: var(--accent);
         color: var(--accent);
       }
+      dialog {
+        width: min(30rem, calc(100vw - 2rem));
+        padding: 1.25rem 1.5rem;
+        border: 1px solid var(--rule);
+        border-radius: 12px;
+        background: var(--surface);
+        color: var(--ink);
+        box-shadow: var(--shadow);
+      }
+      dialog::backdrop {
+        background: rgb(0 0 0 / 0.45);
+      }
+      dialog h2 {
+        margin: 0 0 0.75rem;
+        font-family: var(--serif);
+        font-size: 1.35rem;
+      }
+      dialog label {
+        display: block;
+        margin: 0.85rem 0 0;
+        font-weight: 600;
+        font-size: 0.9rem;
+      }
+      dialog .hint {
+        display: block;
+        font-weight: 400;
+        color: var(--muted);
+        font-size: 0.8rem;
+        margin: 0.1rem 0 0.3rem;
+      }
+      dialog input[type="text"],
+      dialog input[type="password"],
+      dialog select {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 0.5rem 0.6rem;
+        border: 1px solid var(--rule);
+        border-radius: 8px;
+        background: var(--bg);
+        color: var(--ink);
+        font: inherit;
+        font-weight: 400;
+      }
+      dialog label.check {
+        font-weight: 400;
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      dialog .actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.6rem;
+        margin-top: 1.1rem;
+      }
+      dialog .actions button {
+        padding: 0.5rem 1rem;
+        border-radius: 8px;
+        border: 1px solid var(--rule);
+        background: var(--surface);
+        color: var(--ink);
+        font: inherit;
+        cursor: pointer;
+      }
+      dialog .actions button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--accent-ink);
+        font-weight: 600;
+      }
+      dialog .problems {
+        color: var(--down);
+        font-size: 0.85rem;
+        min-height: 1.2em;
+        margin: 0.6rem 0 0;
+      }
       .install {
         border: 0;
         border-radius: 999px;
@@ -757,6 +833,12 @@
             <span class="pulse"></span><span id="status-text">Loading…</span>
           </div>
           <button class="install" id="install" hidden>Install app</button>
+          <button class="iconbtn" id="settings-open" type="button" aria-label="Settings" title="Settings" hidden>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
           <button class="iconbtn" id="alerts" type="button" aria-pressed="false" aria-label="Turn on desktop alerts" hidden>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
@@ -790,6 +872,45 @@
         should trade on, and nothing here is financial advice.
       </footer>
     </div>
+
+    <dialog id="settings" aria-labelledby="settings-title">
+      <form id="settings-form">
+        <h2 id="settings-title">Settings</h2>
+        <label for="set-tickers">My stocks
+          <span class="hint">Stock symbols, separated by commas. Adds a My stocks section and earnings dates.</span>
+        </label>
+        <input id="set-tickers" type="text" autocomplete="off" spellcheck="false" placeholder="AAPL, TSLA, NVDA" />
+        <label for="set-minutes">Look for new news every
+          <span class="hint">News Radar checks while it is running on this computer.</span>
+        </label>
+        <select id="set-minutes">
+          <option value="2">2 minutes</option>
+          <option value="5">5 minutes</option>
+          <option value="10">10 minutes</option>
+          <option value="15">15 minutes</option>
+          <option value="30">30 minutes</option>
+          <option value="60">60 minutes</option>
+        </select>
+        <label for="set-sec">SEC filings: your email (optional)
+          <span class="hint">Turns on filings by big investors (Berkshire, Pershing Square and more). The SEC requires a contact; it is sent only to sec.gov.</span>
+        </label>
+        <input id="set-sec" type="text" autocomplete="off" spellcheck="false" placeholder="you@example.com" />
+        <label for="set-webhook">Discord webhook (optional)
+          <span class="hint">Also posts the news to a Discord channel while News Radar is running. The link stays on this computer.</span>
+        </label>
+        <input id="set-webhook" type="password" autocomplete="off" spellcheck="false" placeholder="Paste a webhook link" />
+        <label class="check" id="set-clear-row" hidden><input type="checkbox" id="set-clear" /> Remove the saved Discord webhook</label>
+        <label for="set-ping">Urgent ping in Discord (optional)
+          <span class="hint">@here, @everyone, user:123456789012345678 or role:123456789012345678</span>
+        </label>
+        <input id="set-ping" type="text" autocomplete="off" spellcheck="false" placeholder="@here" />
+        <p class="problems" id="set-problems" role="status"></p>
+        <div class="actions">
+          <button type="button" id="set-cancel">Cancel</button>
+          <button type="submit" class="primary">Save</button>
+        </div>
+      </form>
+    </dialog>
 
     <script>
       (() => {
@@ -1441,6 +1562,106 @@
         });
         renderAlertsButton();
 
+        // Desktop version: when this page is served by News Radar on your own computer, the
+        // settings button works and Refresh really fetches new news.
+        const desktop = { on: false, settings: null };
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+        async function probeDesktop() {
+          try {
+            const res = await fetch("api/settings", { cache: "no-store" });
+            if (!res.ok) return;
+            const settings = await res.json();
+            if (settings.app !== "news-radar") return;
+            desktop.on = true;
+            desktop.settings = settings;
+            $("settings-open").hidden = false;
+          } catch {
+            /* not the desktop version */
+          }
+        }
+
+        async function desktopPost(path, body) {
+          const res = await fetch(path, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-News-Radar": "1" },
+            body: JSON.stringify(body || {}),
+          });
+          if (!res.ok) throw new Error(`News Radar answered HTTP ${res.status}`);
+          return res.json();
+        }
+
+        async function waitForCycle(maxMs = 120000) {
+          const started = Date.now();
+          await sleep(1000);
+          while (Date.now() - started < maxMs) {
+            try {
+              const res = await fetch("api/settings", { cache: "no-store" });
+              if (!(await res.json()).running) return;
+            } catch {
+              return;
+            }
+            await sleep(2000);
+          }
+        }
+
+        async function refreshNow() {
+          $("refresh").classList.add("spin");
+          try {
+            await desktopPost("api/refresh");
+            await waitForCycle();
+          } catch {
+            /* show whatever news is already saved */
+          }
+          await load();
+        }
+
+        const settingsDialog = $("settings");
+        $("settings-open").addEventListener("click", async () => {
+          try {
+            desktop.settings = await (await fetch("api/settings", { cache: "no-store" })).json();
+          } catch {
+            /* keep the last known settings */
+          }
+          const s = desktop.settings || {};
+          $("set-tickers").value = s.tickers || "";
+          $("set-minutes").value = String(s.refreshMinutes || 5);
+          $("set-sec").value = s.secContact || "";
+          $("set-ping").value = s.ping || "";
+          $("set-webhook").value = "";
+          $("set-webhook").placeholder = s.webhookSet ? "Saved. Leave blank to keep it." : "Paste a webhook link";
+          $("set-clear").checked = false;
+          $("set-clear-row").hidden = !s.webhookSet;
+          $("set-problems").textContent = "";
+          settingsDialog.showModal();
+        });
+        $("set-cancel").addEventListener("click", () => settingsDialog.close());
+        $("settings-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          $("set-problems").textContent = "Saving…";
+          try {
+            const saved = await desktopPost("api/settings", {
+              tickers: $("set-tickers").value,
+              refreshMinutes: Number($("set-minutes").value),
+              secContact: $("set-sec").value,
+              ping: $("set-ping").value,
+              discordWebhook: $("set-webhook").value,
+              clearWebhook: $("set-clear").checked,
+            });
+            desktop.settings = saved;
+            if (saved.problems?.length) {
+              $("set-problems").textContent = saved.problems.join(" ");
+              return;
+            }
+            settingsDialog.close();
+            $("refresh").classList.add("spin");
+            await waitForCycle();
+            await load();
+          } catch (err) {
+            $("set-problems").textContent = `Could not save: ${err.message}`;
+          }
+        });
+
         async function load() {
           const button = $("refresh");
           button.classList.add("spin");
@@ -1458,7 +1679,8 @@
           }
         }
 
-        $("refresh").addEventListener("click", load);
+        $("refresh").addEventListener("click", () => (desktop.on ? refreshNow() : load()));
+        probeDesktop();
         document.addEventListener("visibilitychange", () => {
           if (document.visibilityState === "visible" && (!view.feed || Date.now() - Date.parse(view.feed.generatedAt) > 60 * 1000)) load();
         });
