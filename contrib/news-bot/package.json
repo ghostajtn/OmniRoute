@@ -1,6 +1,6 @@
 {
   "name": "news-radar-bot",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Discord news bot: breaking news, what market-moving people say, and what could happen next.",
   "type": "module",

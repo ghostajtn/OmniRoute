@@ -92,6 +92,72 @@ Notes:
 - GitHub pauses the workflow after 60 days without repository activity. It emails you when it does; turn it
   back on under **Actions → News Bot → Enable workflow**.
 
+### Optional extras
+
+Each of these is off until you set it. On GitHub, add secrets under **Settings → Secrets and variables →
+Actions → Secrets** and plain settings under **Variables**. On your own machine, use the environment
+variables of the same name.
+
+| Extra                 | Setting                                                  | What it does                                                                                                                                      |
+| --------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Your stocks           | Variable `NEWS_BOT_TICKERS` = `AAPL, TSLA, NVDA`         | One news search per stock (a **My stocks** section) and, with the next row, their earnings dates. Up to 25 symbols.                               |
+| Earnings dates        | the same `NEWS_BOT_TICKERS`                              | Nasdaq's public calendar: a heads-up when a report falls within a week and another the day before or the day of. Shown in the app's Calendar tab. |
+| SEC filings           | Secret `NEWS_BOT_SEC_CONTACT` = your email or a web page | Announces filings by big investors (Berkshire, Pershing Square, Bridgewater and more): quarterly 13F holdings and 13D / 13G stakes of 5%+.        |
+| More funds            | Variable `NEWS_BOT_EXTRA_FUNDS` = `Fund A, Fund B`       | Adds funds to the SEC list (names as they appear on EDGAR).                                                                                       |
+| Urgent @mentions      | Variable `NEWS_BOT_PING`                                 | Pings you for market-moving Trump / Fed / White House posts, 13D filings and widely reported stories. See below.                                  |
+| One channel per topic | Secrets `DISCORD_WEBHOOK_TRUMP`, `..._MARKETS`, ...      | Sends each topic to its own channel. See below.                                                                                                   |
+| Desktop alerts in app | the bell button in the app                               | A pop-up for each urgent story while the app is open.                                                                                             |
+
+**SEC contact.** The SEC refuses requests that don't say who is asking, so SEC filings stay off until you
+set `NEWS_BOT_SEC_CONTACT`. It is sent only to sec.gov, in the User-Agent. Keep it a secret on GitHub so it
+doesn't appear in public logs. Form 4 insider trades are not included: EDGAR's live feed is too busy to
+read every 15 minutes.
+
+**Urgent @mentions.** `NEWS_BOT_PING` takes any mix of `@here`, `@everyone`, `user:<id>` and `role:<id>`,
+for example `user:123456789012345678`. To get your ID, turn on **Settings → Advanced → Developer Mode** in
+Discord, then right-click your name and choose **Copy User ID**. The ping text is made by the bot and
+Discord is told to allow only the mentions you listed, so a headline containing "@everyone" can never ping
+anyone. At most 3 pings a run (`NEWS_BOT_MAX_PINGS`).
+
+**One channel per topic.** Make a webhook in each channel and save it as `DISCORD_WEBHOOK_<TOPIC>`, where
+the topic is one of `TRUMP`, `OFFICIAL`, `PEOPLE`, `BREAKING`, `MARKETS`, `WORLD`, `FILINGS`, `STOCKS`,
+`PREDICTIONS`, `CALENDAR`, `PRICES`, `EARNINGS` or `OUTLOOK` (locally: `NEWS_BOT_WEBHOOK_<TOPIC>`). Topics
+without their own webhook keep going to the main channel. **Run the workflow with "Only send a test
+message"** to check each one.
+
+## 2c. News Radar as a Windows app (no GitHub needed)
+
+`desktop/` turns the bot and the web app into a program that runs on your own PC. It collects the news
+itself every few minutes, keeps it on your computer and shows it in its own window (Edge or Chrome as an
+app: no address bar or tabs). It needs no GitHub, Discord or account. Closing the window quits it.
+
+Build the installer (about 23 MB; needs [NSIS](https://nsis.sourceforge.io/): `apt install nsis`):
+
+```bash
+python3 contrib/news-bot/desktop/windows/build_installer.py NewsRadar-Setup.exe
+```
+
+`NewsRadar-Setup.exe` is a normal Windows installer: no administrator rights, installs to
+`%LOCALAPPDATA%\Programs\News Radar`, adds Start menu and desktop shortcuts and an entry in **Apps &
+features** to uninstall. It bundles Node.js 22.22.2 (`node.exe`, taken from nodejs.org and checked against
+the pinned SHA-256), so installing needs no download. It is not code-signed, so Windows SmartScreen says
+"Windows protected your PC" the first time: click **More info**, then **Run anyway**.
+
+The gear button in the app sets your stocks, how often to look for news, an SEC contact and an optional
+Discord webhook. Settings, saved news and `news-radar.log` live in `%LOCALAPPDATA%\NewsRadar\data` and
+are kept when you update or reinstall (the uninstaller asks before deleting them).
+
+If you already have Node.js 22+, you can also run it directly on any system:
+
+```bash
+node contrib/news-bot/desktop/server.mjs [data-folder]   # default ~/.news-radar, or NEWS_RADAR_HOME
+```
+
+The server listens only on `127.0.0.1`. It serves just the app's own files and `feed.json`; it refuses
+requests whose `Host` is not this computer (DNS rebinding), and the endpoints that change anything also
+need the app's own header and a matching `Origin`. The Discord webhook is stored in `settings.json`
+(owner-only) and is never sent back to the page.
+
 ## 2b. Or run it on any machine
 
 It needs Node.js 22 or newer and nothing else.

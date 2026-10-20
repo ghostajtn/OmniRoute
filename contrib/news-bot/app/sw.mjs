@@ -2,7 +2,7 @@
 // News Radar service worker (deployed as sw.js). Keeps the app shell and the last
 // feed.json on the device so the app still opens with the latest news offline.
 
-const SHELL_CACHE = "news-radar-shell-v1";
+const SHELL_CACHE = "news-radar-shell-v2";
 const FEED_CACHE = "news-radar-feed-v1";
 const SHELL = [
   "./",
@@ -74,4 +74,17 @@ self.addEventListener("fetch", (event) => {
   } else {
     event.respondWith(shellFromCache(event.request));
   }
+});
+
+// A click on a desktop alert opens the story (web addresses only).
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = String(event.notification.data?.url || "");
+  event.waitUntil(
+    (async () => {
+      if (/^https?:\/\//i.test(url)) return self.clients.openWindow(url);
+      const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      return windows[0]?.focus();
+    })()
+  );
 });
