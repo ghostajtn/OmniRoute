@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { EventEmitter } from "node:events";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,14 +8,16 @@ import { test } from "node:test";
 
 import {
   DEFAULT_SETTINGS,
+  appWindowArgs,
   applySettingsChange,
+  browserCandidates,
   isOwnRequest,
   normalizeSettings,
   publicSettings,
   settingsToEnv,
   staticFile,
 } from "../lib/desktop.mjs";
-import { startServer } from "../desktop/server.mjs";
+import { startServer, watchWindow } from "../desktop/server.mjs";
 
 const WEBHOOK = "https://discord.com/api/webhooks/123456789/abcDEF_-token";
 
@@ -318,4 +321,49 @@ test("desktop server: settings survive a restart, and a broken file falls back t
   });
   assert.equal(JSON.parse((await call(third.port, { path: "/api/settings" })).text).tickers, "");
   await third.close();
+});
+
+// ── the app window ───────────────────────────────────────────────────────────
+
+test("browser: Edge is tried before Chrome, in the usual Windows places", () => {
+  const found = browserCandidates({
+    "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    ProgramFiles: "C:\\Program Files",
+    LOCALAPPDATA: "C:\\Users\\Me\\AppData\\Local",
+  });
+  assert.equal(found[0], "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe");
+  assert.ok(
+    found.findIndex((p) => p.endsWith("msedge.exe")) <
+      found.findIndex((p) => p.endsWith("chrome.exe"))
+  );
+  assert.deepEqual(browserCandidates({}), [], "nothing to try without the Windows folders");
+});
+
+test("the app window is an app (no tabs) with its own profile, so closing it ends its process", () => {
+  const args = appWindowArgs("http://127.0.0.1:47821/", "C:\\data\\browser-profile");
+  assert.ok(args.includes("--app=http://127.0.0.1:47821/"));
+  assert.ok(args.includes("--user-data-dir=C:\\data\\browser-profile"));
+  assert.ok(args.includes("--no-first-run"));
+});
+
+test("closing the window quits News Radar, but a hand-off to a running browser does not", async () => {
+  let clock = 1_000;
+  const now = () => clock;
+
+  const closedLater = new EventEmitter();
+  const real = watchWindow(closedLater, now);
+  clock += 60_000;
+  closedLater.emit("exit", 0);
+  assert.equal(await real, true, "a window that was open for a minute and then closed");
+
+  const handedOff = new EventEmitter();
+  const quick = watchWindow(handedOff, now);
+  clock += 800;
+  handedOff.emit("exit", 0);
+  assert.equal(await quick, false, "the browser exited at once: not a closed window");
+
+  const broken = new EventEmitter();
+  const failed = watchWindow(broken, now);
+  broken.emit("error", new Error("spawn failed"));
+  assert.equal(await failed, false);
 });

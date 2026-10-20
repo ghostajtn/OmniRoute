@@ -127,25 +127,30 @@ message"** to check each one.
 
 ## 2c. News Radar as a Windows app (no GitHub needed)
 
-`desktop/` turns the bot and the web app into an app that runs on your own PC. It collects the news itself
-every few minutes, keeps it on your computer and shows it in its own window (Edge, without an address
-bar). It needs no GitHub, Discord or account.
+`desktop/` turns the bot and the web app into a program that runs on your own PC. It collects the news
+itself every few minutes, keeps it on your computer and shows it in its own window (Edge or Chrome as an
+app: no address bar or tabs). It needs no GitHub, Discord or account. Closing the window quits it.
 
-Build the download and give it to anyone with Windows 10 or 11:
+Build the installer (about 23 MB; needs [NSIS](https://nsis.sourceforge.io/): `apt install nsis`):
 
 ```bash
-python3 contrib/news-bot/desktop/windows/build_zip.py NewsRadar-Windows.zip
+python3 contrib/news-bot/desktop/windows/build_installer.py NewsRadar-Setup.exe
 ```
 
-Unzipped, double-click **News Radar.bat**. The first start downloads a private copy of Node.js (35 MB,
-checked against a pinned SHA-256, nothing installed system-wide), copies the program to
-`%LOCALAPPDATA%\NewsRadar` and adds a desktop shortcut. The gear button in the app sets your stocks, how
-often to look for news, an SEC contact and an optional Discord webhook.
+`NewsRadar-Setup.exe` is a normal Windows installer: no administrator rights, installs to
+`%LOCALAPPDATA%\Programs\News Radar`, adds Start menu and desktop shortcuts and an entry in **Apps &
+features** to uninstall. It bundles Node.js 22.22.2 (`node.exe`, taken from nodejs.org and checked against
+the pinned SHA-256), so installing needs no download. It is not code-signed, so Windows SmartScreen says
+"Windows protected your PC" the first time: click **More info**, then **Run anyway**.
+
+The gear button in the app sets your stocks, how often to look for news, an SEC contact and an optional
+Discord webhook. Settings, saved news and `news-radar.log` live in `%LOCALAPPDATA%\NewsRadar\data` and
+are kept when you update or reinstall (the uninstaller asks before deleting them).
 
 If you already have Node.js 22+, you can also run it directly on any system:
 
 ```bash
-node contrib/news-bot/desktop/server.mjs   # data in ~/.news-radar, or set NEWS_RADAR_HOME
+node contrib/news-bot/desktop/server.mjs [data-folder]   # default ~/.news-radar, or NEWS_RADAR_HOME
 ```
 
 The server listens only on `127.0.0.1`. It serves just the app's own files and `feed.json`; it refuses

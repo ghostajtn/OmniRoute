@@ -7,6 +7,7 @@
 // Your settings and the news live in NEWS_RADAR_HOME (default: ~/.news-radar).
 
 import { spawn } from "node:child_process";
+import { appendFileSync, existsSync, statSync, truncateSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
@@ -16,7 +17,9 @@ import { fileURLToPath } from "node:url";
 import { createDiscords, createHttpGet, loadConfig, outputMode, runCycle } from "../newsBot.mjs";
 import {
   DEFAULT_SETTINGS,
+  appWindowArgs,
   applySettingsChange,
+  browserCandidates,
   isOwnRequest,
   normalizeSettings,
   publicSettings,
@@ -226,22 +229,74 @@ export async function startServer({
   };
 }
 
-/** Open the app window: Edge as an app (no address bar) on Windows, else the default browser. */
-export function openWindow(url) {
+/**
+ * Resolves to true when the browser process behind an app window ends after a real session.
+ * An exit within seconds means the window was handed to a browser that was already running
+ * (or never opened), so it says nothing about the window being closed.
+ */
+export function watchWindow(child, now = Date.now) {
+  const started = now();
+  return new Promise((resolve) => {
+    child.once("exit", () => resolve(now() - started > 10_000));
+    child.once("error", () => resolve(false));
+  });
+}
+
+/**
+ * Open the app window: Edge (or Chrome) as an app on Windows, else the default browser.
+ * Returns `closed`, a promise that resolves to true when that window's session has ended
+ * (only for a window we started and can watch), otherwise null.
+ */
+export function openWindow(url, home, { watch = true } = {}) {
   const env = { ...process.env, NEWS_RADAR_URL: url };
-  const options = { env, detached: true, stdio: "ignore", windowsHide: true };
   if (process.platform === "win32") {
+    const browser = browserCandidates(process.env).find((path) => existsSync(path));
+    if (browser) {
+      const child = spawn(browser, appWindowArgs(url, join(home, "browser-profile")), {
+        stdio: "ignore",
+      });
+      if (!watch) {
+        child.unref();
+        return { closed: null };
+      }
+      const closed = watchWindow(child);
+      return { closed };
+    }
     // The address goes through the environment, never into the command text.
-    spawn(
-      "cmd.exe",
-      ["/d", "/c", 'start "" msedge --app=%NEWS_RADAR_URL% || start "" %NEWS_RADAR_URL%'],
-      options
-    ).unref();
-  } else if (process.platform === "darwin") {
-    spawn("open", [url], options).unref();
-  } else {
-    spawn("xdg-open", [url], options).unref();
+    spawn("cmd.exe", ["/d", "/c", 'start "" %NEWS_RADAR_URL%'], {
+      env,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    }).unref();
+    return { closed: null };
   }
+  const opener = process.platform === "darwin" ? "open" : "xdg-open";
+  spawn(opener, [url], { env, detached: true, stdio: "ignore" }).unref();
+  return { closed: null };
+}
+
+/** A logger that prints and also appends to news-radar.log (the app runs without a console). */
+function fileLogger(home) {
+  const file = join(home, "news-radar.log");
+  try {
+    if (statSync(file).size > 1024 * 1024) truncateSync(file, 0);
+  } catch {
+    /* no log yet */
+  }
+  return (message) => {
+    const line = `[${new Date().toISOString()}] ${message}\n`;
+    try {
+      appendFileSync(file, line);
+    } catch {
+      /* the log is a courtesy */
+    }
+    try {
+      process.stdout.write(line);
+    } catch {
+      /* no console (the Windows launcher hides it); the log file has everything */
+    }
+  };
 }
 
 async function isNewsRadar(port) {
@@ -255,45 +310,68 @@ async function isNewsRadar(port) {
   }
 }
 
+// Where settings, news and the log are kept: the first argument (the Windows launcher passes it),
+// else NEWS_RADAR_HOME, else ~/.news-radar.
+const dataHome = () =>
+  process.argv[2] || process.env.NEWS_RADAR_HOME || join(homedir(), ".news-radar");
+
 async function main() {
-  const home = process.env.NEWS_RADAR_HOME || join(homedir(), ".news-radar");
+  const home = dataHome();
+  await mkdir(home, { recursive: true });
+  const log = fileLogger(home);
+  // The bot prints with console.log; with no console that would throw, so it all goes to the log.
+  const toLog = (...parts) => log(parts.map(String).join(" "));
+  console.log = toLog;
+  console.warn = toLog;
+  console.error = toLog;
   const noOpen = Boolean(process.env.NEWS_RADAR_NO_OPEN);
   let app = null;
   for (let port = DEFAULT_PORT; port < DEFAULT_PORT + 10 && !app; port++) {
     try {
-      app = await startServer({ home, port });
+      app = await startServer({ home, port, log });
     } catch (err) {
       if (err.code !== "EADDRINUSE") throw err;
       if (await isNewsRadar(port)) {
-        console.log("News Radar is already running. Opening its window.");
-        if (!noOpen) openWindow(`http://127.0.0.1:${port}/`);
+        log("News Radar is already running. Opening another window.");
+        if (!noOpen) openWindow(`http://127.0.0.1:${port}/`, home, { watch: false });
         return;
       }
     }
   }
   if (!app) throw new Error("No free port for News Radar on this computer.");
 
-  console.log("News Radar is running on this computer.");
-  console.log("Keep this window open (you can minimise it). Close it to quit News Radar.");
-  console.log(`Your settings and news are saved in ${home}`);
-  console.log("Getting the latest news…");
-
+  log(`News Radar is running. Settings and news are kept in ${home}`);
+  log("Getting the latest news...");
   const first = app.start();
   // The window opens as soon as there is news to show (or after a minute, whatever happens).
   await Promise.race([first, new Promise((resolve) => setTimeout(resolve, 60_000))]);
-  if (!noOpen) openWindow(app.url);
-  console.log(`The app window is at ${app.url}`);
 
   const quit = () => {
+    log("Quitting News Radar.");
     app.close().finally(() => process.exit(0));
   };
   process.on("SIGINT", quit);
   process.on("SIGTERM", quit);
+
+  if (!noOpen) {
+    const { closed } = openWindow(app.url, home);
+    log(`The app window is at ${app.url}`);
+    // Closing the window quits News Radar.
+    closed?.then((ended) => ended && quit());
+  }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   main().catch((err) => {
-    console.error(`News Radar could not start: ${err.message}`);
+    const message = `News Radar could not start: ${err.message}`;
+    try {
+      appendFileSync(
+        join(dataHome(), "news-radar.log"),
+        `[${new Date().toISOString()}] ${message}\n`
+      );
+    } catch {
+      /* nowhere to write it */
+    }
     process.exit(1);
   });
 }

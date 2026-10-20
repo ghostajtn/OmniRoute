@@ -130,3 +130,34 @@ const STATIC_FILES = {
 export function staticFile(pathname) {
   return STATIC_FILES[pathname] || null;
 }
+
+/** Where Edge (then Chrome) usually lives on Windows, most likely first. */
+export function browserCandidates(env) {
+  const pf86 = env["ProgramFiles(x86)"];
+  const pf = env.ProgramFiles;
+  const local = env.LOCALAPPDATA;
+  const found = [];
+  for (const base of [pf86, pf, local]) {
+    if (base) found.push(`${base}\\Microsoft\\Edge\\Application\\msedge.exe`);
+  }
+  for (const base of [pf, pf86, local]) {
+    if (base) found.push(`${base}\\Google\\Chrome\\Application\\chrome.exe`);
+  }
+  return found;
+}
+
+/**
+ * Command-line arguments for an app window (no address bar or tabs). It gets its own browser
+ * profile, so it is a separate browser process: closing the window ends that process, which
+ * is how News Radar knows to quit.
+ */
+export function appWindowArgs(url, profileDir) {
+  return [
+    `--app=${url}`,
+    `--user-data-dir=${profileDir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-background-mode",
+    "--window-size=1240,880",
+  ];
+}
